@@ -93,7 +93,10 @@ one's acceptance criteria are met and manually verified in a running KeePass.
 > - **`ResultForm` exists** (`Ui/ResultForm.cs`) showing the share link and the receipt link
 >   as selectable read-only boxes with a Copy button each. Built in M1 because the clipboard
 >   auto-clear could otherwise lose the only copy of a link while the secret stayed live and
->   unburnable. **M3 still owes:** the passphrase row and its separate copy button.
+>   unburnable. **M3 still owes:** the passphrase row and its separate copy button, and
+>   **making the clipboard-clear warning far more prominent** — it is currently a small grey
+>   line under the receipt box that is easy to miss, and missing it is precisely how a user
+>   loses the only copy of a live link.
 > - **TLS 1.2/1.3 is already forced at init** via `HttpTransport.EnableModernTls()`.
 > - **Most of the §8 error mapping is already in `OtsClientV1`** (401/403, 429, 400/422 with
 >   the `ttl` hint, timeout, DNS, TLS). **M3 still owes:** surfacing these through the new
