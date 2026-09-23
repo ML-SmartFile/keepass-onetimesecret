@@ -3,11 +3,13 @@ using System.Threading;
 using System.Windows.Forms;
 using KeePass.Forms;
 using KeePass.Plugins;
+using KeePass.UI;
 using KeePass.Util;
 using KeePassLib;
 using OneTimeSecret.Core;
 using OneTimeSecret.KeePassAdapters;
 using OneTimeSecret.Ots;
+using OneTimeSecret.Ui;
 
 namespace OneTimeSecret
 {
@@ -113,28 +115,44 @@ namespace OneTimeSecret
 
         private void OnShareSucceeded(MainForm mainWindow, ShareResult result, PwEntry entry)
         {
-            // The database may have locked while the request was in flight.
+            CopyToClipboard(mainWindow, result.ShareUrl, entry);
+
+            using (var form = new ResultForm(result.ShareUrl, result.ReceiptUrl,
+                delegate(string text) { CopyToClipboard(mainWindow, text, entry); }))
+            {
+                GlobalWindowManager.AddWindow(form);
+                try
+                {
+                    form.ShowDialog(mainWindow);
+                }
+                finally
+                {
+                    GlobalWindowManager.RemoveWindow(form);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The database may lock at any point - while the request is in flight, or while the
+        /// result dialog is open - so its state is re-checked on every copy rather than
+        /// captured once.
+        /// </summary>
+        private void CopyToClipboard(MainForm mainWindow, string text, PwEntry entry)
+        {
             PwDatabase database = null;
             if (m_host != null && m_host.Database != null && m_host.Database.IsOpen)
                 database = m_host.Database;
 
             PwEntry clipboardEntry = (database != null) ? entry : null;
 
-            // bSprCompile stays false: the share URL is final and must not be recompiled.
+            // bSprCompile stays false: these URLs are final and must not be recompiled.
             // bIsEntryInfo stays true so the link counts as entry data for clipboard handling.
-            bool copied = ClipboardUtil.Copy(
-                result.ShareUrl, false, true, clipboardEntry, database, mainWindow.Handle);
+            bool copied = ClipboardUtil.Copy(text, false, true, clipboardEntry, database, mainWindow.Handle);
 
             // Copy alone does NOT arm the auto-clear timer - MainForm owns the countdown, and
             // KeePass's own copy handlers call this straight after copying. Without it the
             // link sits on the clipboard indefinitely.
             if (copied) mainWindow.StartClipboardCountdown();
-
-            MessageBox.Show(mainWindow,
-                "The one-time link was copied to the clipboard:" + Environment.NewLine + Environment.NewLine +
-                result.ShareUrl + Environment.NewLine + Environment.NewLine +
-                "It can be opened once. Anyone with the link can read the secret.",
-                "OneTimeSecret", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private static void ShowError(MainForm mainWindow, string message)
