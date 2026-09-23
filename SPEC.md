@@ -177,8 +177,22 @@ A raw `Strings.ReadSafe` alone will hand OneTimeSecret an unresolved reference s
 
 ### Clipboard
 
-Use `ClipboardUtil.Copy(text, true, true, pe, db, hOwner)` rather than
-`Clipboard.SetText`, so KeePass's auto-clear timeout applies.
+Use `ClipboardUtil.Copy(text, bSprCompile, bIsEntryInfo, pe, db, hOwner)` rather than
+`Clipboard.SetText`.
+
+Pass `bSprCompile: false` for a value that is already final — a share URL must not be run
+through `SprEngine` again.
+
+**`Copy` does not arm the auto-clear timer.** The countdown belongs to `MainForm`, and
+KeePass's own copy handlers call it immediately after copying. Verified against 2.61.1.0:
+
+```csharp
+if (ClipboardUtil.Copy(url, false, true, pe, db, hOwner))
+    m_host.MainWindow.StartClipboardCountdown();
+```
+
+Omit the second line and the value stays on the clipboard indefinitely — found by manual
+smoke test in M1, not by any compiler or unit test.
 
 ### Custom forms
 
