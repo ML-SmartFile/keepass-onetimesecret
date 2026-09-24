@@ -9,7 +9,11 @@ namespace OneTimeSecret.Ots
     /// </summary>
     public interface IHttpTransport
     {
-        HttpResult Post(Uri uri, string contentType, byte[] body, int timeoutMs);
+        /// <summary>
+        /// Posts a body. <paramref name="authorizationHeader"/> is null for anonymous
+        /// requests; when set it is sent verbatim as the Authorization header.
+        /// </summary>
+        HttpResult Post(Uri uri, string contentType, byte[] body, string authorizationHeader, int timeoutMs);
     }
 
     public sealed class HttpResult

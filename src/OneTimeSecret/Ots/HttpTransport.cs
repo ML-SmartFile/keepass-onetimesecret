@@ -11,7 +11,7 @@ namespace OneTimeSecret.Ots
     /// </summary>
     public sealed class HttpTransport : IHttpTransport
     {
-        public HttpResult Post(Uri uri, string contentType, byte[] body, int timeoutMs)
+        public HttpResult Post(Uri uri, string contentType, byte[] body, string authorizationHeader, int timeoutMs)
         {
             if (uri == null) throw new ArgumentNullException("uri");
             if (body == null) throw new ArgumentNullException("body");
@@ -25,6 +25,12 @@ namespace OneTimeSecret.Ots
             request.UserAgent = "KeePassOneTimeSecret";
             request.Accept = "application/json";
             request.AllowAutoRedirect = false;
+
+            // Set explicitly rather than via NetworkCredential: pre-emptive Basic avoids the
+            // 401 round trip, and a redirect must never carry the token to another host -
+            // hence AllowAutoRedirect above stays false.
+            if (!string.IsNullOrEmpty(authorizationHeader))
+                request.Headers[HttpRequestHeader.Authorization] = authorizationHeader;
 
             try
             {
