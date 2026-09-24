@@ -370,11 +370,20 @@ OTS account email, `Password` is the API token. The options dialog offers an ent
 | Condition | Behaviour |
 |---|---|
 | 401 / 403 | "Check your OneTimeSecret credentials" + link to options |
+| **404 on the v1 share endpoint** | **Rejected credentials *or* a base URL with no v1 API — name both.** See the note below |
 | 404 on a v2 endpoint | Re-run capability detection once, then retry as v1 |
 | 429 | Surface the rate-limit message; suggest configuring credentials if anonymous |
 | 400 / 422 | Show `error`; if the field is `ttl`, note that anonymous TTL is capped |
 | Timeout / DNS | Plain network error; do not retry automatically |
 | TLS failure | Explicit message; never offer to disable validation |
+
+> **Verified against `eu.onetimesecret.com`, September 2026.** Invalid credentials on the v1
+> share endpoint return **404**, not 401 or 403 — so a 401/403 handler alone never fires for
+> the hosted service and the user is left staring at a bare "HTTP 404". The response body is
+> *inconsistent*: observed both empty and carrying `Not authorized`, so the message must be
+> useful without it. Because a 404 there is equally consistent with a base URL that has no v1
+> API, the wording names both causes and drops the credential explanation when the request was
+> anonymous. The 401/403 row is retained for self-hosted instances that do use it.
 
 Default HTTP timeout: 20 seconds. Set `ServicePointManager.SecurityProtocol` to include
 TLS 1.2 and 1.3 explicitly at plugin init — older KeePass/.NET combinations still
