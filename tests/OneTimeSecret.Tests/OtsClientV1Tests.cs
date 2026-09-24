@@ -82,6 +82,61 @@ namespace OneTimeSecret.Tests
         }
 
         [Fact]
+        public void Share_PrefersTheServerSuppliedReceiptUrl()
+        {
+            // Constructing this ourselves produced a 404: the hosted service serves the
+            // receipt from /receipt/, not the /private/ path SPEC.md documented.
+            var transport = new StubTransport(new HttpResult(200,
+                "{\"secret_key\":\"SK\",\"metadata_key\":\"MK\"," +
+                "\"receipt_url\":\"https://eu.onetimesecret.com/receipt/MK\"," +
+                "\"metadata_url\":\"https://eu.onetimesecret.com/receipt/MK\"}"));
+
+            ShareResult result = Client(transport).Share(new ShareRequest(Secret, 86400));
+            Assert.Equal("https://eu.onetimesecret.com/receipt/MK", result.ReceiptUrl);
+        }
+
+        [Fact]
+        public void Share_FallsBackToMetadataUrlWhenReceiptUrlIsAbsent()
+        {
+            var transport = new StubTransport(new HttpResult(200,
+                "{\"secret_key\":\"SK\",\"metadata_key\":\"MK\"," +
+                "\"metadata_url\":\"https://eu.onetimesecret.com/receipt/MK\"}"));
+
+            ShareResult result = Client(transport).Share(new ShareRequest(Secret, 86400));
+            Assert.Equal("https://eu.onetimesecret.com/receipt/MK", result.ReceiptUrl);
+        }
+
+        [Fact]
+        public void Share_FallsBackToTheLegacyPrivatePathForOlderInstances()
+        {
+            // Self-hosted instances predating these fields still serve /private/.
+            var transport = new StubTransport(new HttpResult(200,
+                "{\"secret_key\":\"SK\",\"metadata_key\":\"MK\"}"));
+
+            ShareResult result = Client(transport, "https://ots.internal").Share(new ShareRequest(Secret, 86400));
+            Assert.Equal("https://ots.internal/private/MK", result.ReceiptUrl);
+        }
+
+        [Fact]
+        public void Share_ReadsARealWorldV1Payload()
+        {
+            // Captured verbatim from eu.onetimesecret.com, trimmed of nothing but whitespace.
+            var transport = new StubTransport(new HttpResult(200,
+                "{\"custid\":\"anon\",\"metadata_key\":\"MK\",\"secret_key\":\"SK\",\"ttl\":300," +
+                "\"metadata_ttl\":600,\"secret_ttl\":300," +
+                "\"metadata_url\":\"https://eu.onetimesecret.com/receipt/MK\",\"state\":\"new\"," +
+                "\"updated\":1790198498,\"created\":1790198498,\"recipient\":[],\"share_domain\":\"\"," +
+                "\"passphrase_required\":false,\"identifier\":\"MK\",\"secret_identifier\":\"SK\"," +
+                "\"has_passphrase\":false,\"recipients\":[],\"receipt_ttl\":600," +
+                "\"receipt_url\":\"https://eu.onetimesecret.com/receipt/MK\"}"));
+
+            ShareResult result = Client(transport).Share(new ShareRequest(Secret, 300));
+
+            Assert.Equal("https://eu.onetimesecret.com/secret/SK", result.ShareUrl);
+            Assert.Equal("https://eu.onetimesecret.com/receipt/MK", result.ReceiptUrl);
+        }
+
+        [Fact]
         public void Share_ZeroesTheRequestBodyBuffer()
         {
             var transport = Success();

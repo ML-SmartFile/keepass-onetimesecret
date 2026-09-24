@@ -85,11 +85,21 @@ namespace OneTimeSecret.Ots
             string metadataKey = Json.GetString(obj, "metadata_key");
 
             string root = m_baseUri.AbsoluteUri.TrimEnd('/');
+
+            // Prefer the URL the server hands back. The hosted service moved this page from
+            // /private/ to /receipt/, and only the server knows the right host once
+            // share_domain is configured - constructing it ourselves produced a 404.
+            // Older self-hosted instances return neither field, hence the legacy fallback.
+            string receiptUrl =
+                Json.GetStringOrNull(obj, "receipt_url") ??
+                Json.GetStringOrNull(obj, "metadata_url") ??
+                (root + "/private/" + metadataKey);
+
             return new ShareResult(
                 secretKey,
                 metadataKey,
                 root + "/secret/" + secretKey,
-                root + "/private/" + metadataKey);
+                receiptUrl);
         }
 
         private static OtsException Translate(HttpTransportException ex)
