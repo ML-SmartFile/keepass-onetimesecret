@@ -1,0 +1,40 @@
+# Local OneTimeSecret instance for testing this plugin against a self-hosted server.
+# Not part of the shipped plugin. See README.md "Local testing against a self-hosted
+# instance" for usage.
+#
+# Three entry points on purpose, each isolating one thing to prove:
+#   - http://localhost:3000       plain HTTP, no certificate involved
+#   - https://localhost:8443      Caddy in front, self-signed cert via `tls internal`
+#   - http://localhost:8080/ots   plain HTTP again, but path-prefixed - kept off the
+#                                  self-signed port so the prefix can be tested without
+#                                  first having to trust that certificate
+#
+# SECRET below is a fixed placeholder - fine for a disposable local test instance that
+# never holds anything real, but never reuse it for anything that matters.
+services:
+  redis:
+    image: redis:bookworm
+    ports:
+      - "6379:6379"
+
+  onetimesecret:
+    image: onetimesecret/onetimesecret:v0.26.2
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      SECRET: dev-only-local-testing-secret-do-not-reuse
+      HOST: localhost:8443
+      SSL: "true"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - redis
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "8443:8443"
+      - "8080:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - onetimesecret
