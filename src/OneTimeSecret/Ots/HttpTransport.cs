@@ -2,19 +2,38 @@ using System;
 using System.IO;
 using System.Net;
 using System.Text;
+using System.Threading;
 
 namespace OneTimeSecret.Ots
 {
     /// <summary>
-    /// HttpWebRequest-based transport. Uses the system default proxy, and never touches
-    /// ServerCertificateValidationCallback - a TLS failure is surfaced, never bypassed.
+    /// HttpWebRequest-based transport. Never touches ServerCertificateValidationCallback -
+    /// a TLS failure is surfaced, never bypassed.
     /// </summary>
     public sealed class HttpTransport : IHttpTransport
     {
-        public HttpResult Post(Uri uri, string contentType, byte[] body, string authorizationHeader, int timeoutMs)
+        private readonly IWebProxy m_proxy;
+
+        /// <summary>Uses whatever proxy the system default supplies.</summary>
+        public HttpTransport() : this(null) { }
+
+        /// <summary>
+        /// <paramref name="proxy"/> null means "leave the request's default alone". The
+        /// caller resolves KeePass's own proxy configuration, since this layer must stay
+        /// free of KeePass references.
+        /// </summary>
+        public HttpTransport(IWebProxy proxy)
+        {
+            m_proxy = proxy;
+        }
+
+        public HttpResult Post(Uri uri, string contentType, byte[] body, string authorizationHeader,
+            int timeoutMs, CancellationToken cancellationToken)
         {
             if (uri == null) throw new ArgumentNullException("uri");
             if (body == null) throw new ArgumentNullException("body");
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             var request = (HttpWebRequest)WebRequest.Create(uri);
             request.Method = "POST";
@@ -26,36 +45,48 @@ namespace OneTimeSecret.Ots
             request.Accept = "application/json";
             request.AllowAutoRedirect = false;
 
+            if (m_proxy != null) request.Proxy = m_proxy;
+
             // Set explicitly rather than via NetworkCredential: pre-emptive Basic avoids the
             // 401 round trip, and a redirect must never carry the token to another host -
             // hence AllowAutoRedirect above stays false.
             if (!string.IsNullOrEmpty(authorizationHeader))
                 request.Headers[HttpRequestHeader.Authorization] = authorizationHeader;
 
-            try
+            // Abort is the only way to interrupt a blocking HttpWebRequest. It makes the
+            // pending call throw, which is translated below.
+            using (cancellationToken.Register(delegate { try { request.Abort(); } catch { } }))
             {
-                using (Stream stream = request.GetRequestStream())
+                try
                 {
-                    stream.Write(body, 0, body.Length);
-                }
-
-                using (var response = (HttpWebResponse)request.GetResponse())
-                {
-                    return new HttpResult((int)response.StatusCode, ReadBody(response));
-                }
-            }
-            catch (WebException ex)
-            {
-                var errorResponse = ex.Response as HttpWebResponse;
-                if (errorResponse != null)
-                {
-                    using (errorResponse)
+                    using (Stream stream = request.GetRequestStream())
                     {
-                        return new HttpResult((int)errorResponse.StatusCode, ReadBody(errorResponse));
+                        stream.Write(body, 0, body.Length);
+                    }
+
+                    using (var response = (HttpWebResponse)request.GetResponse())
+                    {
+                        return new HttpResult((int)response.StatusCode, ReadBody(response));
                     }
                 }
+                catch (WebException ex)
+                {
+                    // Distinguish "we gave up" from "the network failed". The secret may
+                    // already exist server-side either way.
+                    if (cancellationToken.IsCancellationRequested)
+                        throw new OperationCanceledException(cancellationToken);
 
-                throw Translate(ex);
+                    var errorResponse = ex.Response as HttpWebResponse;
+                    if (errorResponse != null)
+                    {
+                        using (errorResponse)
+                        {
+                            return new HttpResult((int)errorResponse.StatusCode, ReadBody(errorResponse));
+                        }
+                    }
+
+                    throw Translate(ex);
+                }
             }
         }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Threading;
 
 namespace OneTimeSecret.Ots
 {
@@ -37,6 +38,11 @@ namespace OneTimeSecret.Ots
 
         public ShareResult Share(ShareRequest request)
         {
+            return Share(request, CancellationToken.None);
+        }
+
+        public ShareResult Share(ShareRequest request, CancellationToken cancellationToken)
+        {
             if (request == null) throw new ArgumentNullException("request");
 
             var endpoint = new Uri(m_baseUri.AbsoluteUri.TrimEnd('/') + "/api/v1/share");
@@ -48,7 +54,7 @@ namespace OneTimeSecret.Ots
                 body = BuildFormBody(request);
                 response = m_transport.Post(
                     endpoint, "application/x-www-form-urlencoded", body,
-                    BasicAuth.Header(m_credentials), m_timeoutMs);
+                    BasicAuth.Header(m_credentials), m_timeoutMs, cancellationToken);
             }
             catch (HttpTransportException ex)
             {
@@ -63,7 +69,7 @@ namespace OneTimeSecret.Ots
 
             if (!response.IsSuccess) throw TranslateHttpError(response, m_credentials.IsAnonymous);
 
-            return ParseShareResponse(response.Body);
+            return ParseShareResponse(response.Body, request.TtlSeconds);
         }
 
         private static byte[] BuildFormBody(ShareRequest request)
@@ -71,10 +77,17 @@ namespace OneTimeSecret.Ots
             var sb = new StringBuilder();
             sb.Append("secret=").Append(Uri.EscapeDataString(request.Secret));
             sb.Append("&ttl=").Append(request.TtlSeconds.ToString(CultureInfo.InvariantCulture));
+
+            if (!string.IsNullOrEmpty(request.Passphrase))
+                sb.Append("&passphrase=").Append(Uri.EscapeDataString(request.Passphrase));
+
+            if (!string.IsNullOrEmpty(request.Recipient))
+                sb.Append("&recipient=").Append(Uri.EscapeDataString(request.Recipient));
+
             return Encoding.UTF8.GetBytes(sb.ToString());
         }
 
-        private ShareResult ParseShareResponse(string responseBody)
+        private ShareResult ParseShareResponse(string responseBody, int requestedTtlSeconds)
         {
             Dictionary<string, object> obj;
             try
@@ -101,11 +114,20 @@ namespace OneTimeSecret.Ots
                 Json.GetStringOrNull(obj, "metadata_url") ??
                 (root + "/private/" + metadataKey);
 
+            // The server reports the lifetime it actually applied. It silently clamps rather
+            // than rejecting an over-long request, so reading this back is the only way to
+            // avoid telling the user their link lives longer than it does.
+            int effectiveTtl = Json.GetIntOrNull(obj, "secret_ttl")
+                ?? Json.GetIntOrNull(obj, "ttl")
+                ?? 0;
+
             return new ShareResult(
                 secretKey,
                 metadataKey,
                 root + "/secret/" + secretKey,
-                receiptUrl);
+                receiptUrl,
+                requestedTtlSeconds,
+                effectiveTtl);
         }
 
         private static OtsException Translate(HttpTransportException ex)

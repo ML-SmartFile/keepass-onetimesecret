@@ -1,39 +1,84 @@
 using System;
+using System.Threading;
 
 namespace OneTimeSecret.Ots
 {
     public sealed class ShareRequest
     {
         public ShareRequest(string secret, int ttlSeconds)
+            : this(secret, ttlSeconds, null, null) { }
+
+        public ShareRequest(string secret, int ttlSeconds, string passphrase, string recipient)
         {
             if (secret == null) throw new ArgumentNullException("secret");
             Secret = secret;
             TtlSeconds = ttlSeconds;
+            Passphrase = passphrase;
+            Recipient = recipient;
         }
 
         public string Secret { get; private set; }
         public int TtlSeconds { get; private set; }
+
+        /// <summary>
+        /// Optional. When set, the recipient must enter it to reveal the secret. It is not
+        /// part of the share link and must be delivered over a different channel.
+        /// </summary>
+        public string Passphrase { get; private set; }
+
+        /// <summary>Optional e-mail address; OneTimeSecret delivers the link itself.</summary>
+        public string Recipient { get; private set; }
+
+        public bool HasPassphrase { get { return !string.IsNullOrEmpty(Passphrase); } }
     }
 
     public sealed class ShareResult
     {
-        public ShareResult(string secretKey, string metadataKey, string shareUrl, string receiptUrl)
+        public ShareResult(string secretKey, string metadataKey, string shareUrl, string receiptUrl,
+            int requestedTtlSeconds, int effectiveTtlSeconds)
         {
             SecretKey = secretKey;
             MetadataKey = metadataKey;
             ShareUrl = shareUrl;
             ReceiptUrl = receiptUrl;
+            RequestedTtlSeconds = requestedTtlSeconds;
+            EffectiveTtlSeconds = effectiveTtlSeconds;
         }
 
         public string SecretKey { get; private set; }
         public string MetadataKey { get; private set; }
         public string ShareUrl { get; private set; }
         public string ReceiptUrl { get; private set; }
+
+        public int RequestedTtlSeconds { get; private set; }
+
+        /// <summary>
+        /// The lifetime the server actually applied, or 0 when it did not say. The hosted
+        /// service silently clamps anonymous shares to 7 days instead of rejecting a longer
+        /// request, so this is the only honest source for what the user really got.
+        /// </summary>
+        public int EffectiveTtlSeconds { get; private set; }
+
+        public bool TtlWasShortened
+        {
+            get
+            {
+                return EffectiveTtlSeconds > 0
+                    && RequestedTtlSeconds > 0
+                    && EffectiveTtlSeconds < RequestedTtlSeconds;
+            }
+        }
     }
 
     public interface IOtsClient
     {
         ShareResult Share(ShareRequest request);
+
+        /// <summary>
+        /// Cancellation stops us waiting for the response. It cannot un-create a secret the
+        /// server may already have stored, and callers must not imply that it did.
+        /// </summary>
+        ShareResult Share(ShareRequest request, CancellationToken cancellationToken);
     }
 
     /// <summary>

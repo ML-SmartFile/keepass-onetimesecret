@@ -50,16 +50,19 @@ namespace OneTimeSecret.KeePassAdapters
             set { m_config.SetLong(Prefix + "DefaultTtlSeconds", value); }
         }
 
+        /// <summary>
+        /// Normalized to CRLF on read: the config is XML, and XML parsing collapses CRLF to
+        /// a bare LF. A WinForms multi-line TextBox only breaks on CRLF, so without this a
+        /// stored multi-line template renders as a single run-on line.
+        /// </summary>
         public string Template
         {
-            get { return m_config.GetString(Prefix + "Template", SecretComposer.DefaultTemplate); }
+            get
+            {
+                return SecretComposer.NormalizeNewLines(
+                    m_config.GetString(Prefix + "Template", SecretComposer.DefaultTemplate));
+            }
             set { m_config.SetString(Prefix + "Template", value); }
-        }
-
-        public string CustomMessage
-        {
-            get { return m_config.GetString(Prefix + "CustomMessage", string.Empty); }
-            set { m_config.SetString(Prefix + "CustomMessage", value); }
         }
 
         public bool IncludeTitle
@@ -92,10 +95,20 @@ namespace OneTimeSecret.KeePassAdapters
             set { m_config.SetBool(Prefix + "IncludeNotes", value); }
         }
 
-        public bool GeneratePassphrase
+        /// <summary>
+        /// The default passphrase mode for new shares. Only the mode is stored - "Enter one
+        /// each time" preselects the manual option with an empty box; a stored passphrase
+        /// would be a stored secret.
+        /// </summary>
+        public PassphraseMode PassphraseMode
         {
-            get { return m_config.GetBool(Prefix + "GeneratePassphrase", true); }
-            set { m_config.SetBool(Prefix + "GeneratePassphrase", value); }
+            get
+            {
+                return PassphraseModes.Parse(
+                    m_config.GetString(Prefix + "PassphraseMode", string.Empty),
+                    Core.PassphraseMode.Generate);
+            }
+            set { m_config.SetString(Prefix + "PassphraseMode", PassphraseModes.ToConfigValue(value)); }
         }
 
         public bool WriteBackReceipt
@@ -111,33 +124,48 @@ namespace OneTimeSecret.KeePassAdapters
         }
 
         /// <summary>
+        /// Hex PwUuid of the entry whose Password field holds the standing passphrase, used
+        /// when PassphraseMode is Entry. Like the credential entry, only the reference is
+        /// stored and the value is read at share time.
+        /// </summary>
+        public PwUuid PassphraseEntryUuid
+        {
+            get { return ReadUuid("PassphraseEntryUuid"); }
+            set { WriteUuid("PassphraseEntryUuid", value); }
+        }
+
+        /// <summary>
         /// Hex PwUuid of the entry holding the OTS account e-mail and API token.
         /// Empty means anonymous. Never the token itself.
         /// </summary>
         public PwUuid CredentialEntryUuid
         {
-            get
-            {
-                string hex = m_config.GetString(Prefix + "CredentialEntryUuid", string.Empty);
-                if (string.IsNullOrEmpty(hex)) return PwUuid.Zero;
+            get { return ReadUuid("CredentialEntryUuid"); }
+            set { WriteUuid("CredentialEntryUuid", value); }
+        }
 
-                try
-                {
-                    byte[] bytes = MemUtil.HexStringToByteArray(hex);
-                    if (bytes == null || bytes.Length != (int)PwUuid.UuidSize) return PwUuid.Zero;
-                    return new PwUuid(bytes);
-                }
-                catch (Exception)
-                {
-                    // A hand-edited or truncated value degrades to anonymous rather than throwing.
-                    return PwUuid.Zero;
-                }
-            }
-            set
+        private PwUuid ReadUuid(string key)
+        {
+            string hex = m_config.GetString(Prefix + key, string.Empty);
+            if (string.IsNullOrEmpty(hex)) return PwUuid.Zero;
+
+            try
             {
-                bool empty = (value == null) || value.Equals(PwUuid.Zero);
-                m_config.SetString(Prefix + "CredentialEntryUuid", empty ? string.Empty : value.ToHexString());
+                byte[] bytes = MemUtil.HexStringToByteArray(hex);
+                if (bytes == null || bytes.Length != (int)PwUuid.UuidSize) return PwUuid.Zero;
+                return new PwUuid(bytes);
             }
+            catch (Exception)
+            {
+                // A hand-edited or truncated value degrades to "not configured" rather than throwing.
+                return PwUuid.Zero;
+            }
+        }
+
+        private void WriteUuid(string key, PwUuid value)
+        {
+            bool empty = (value == null) || value.Equals(PwUuid.Zero);
+            m_config.SetString(Prefix + key, empty ? string.Empty : value.ToHexString());
         }
 
         public string DetectedVersion

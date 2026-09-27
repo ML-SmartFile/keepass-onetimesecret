@@ -64,6 +64,23 @@ namespace OneTimeSecret.Tests
         }
 
         [Fact]
+        public void AStrayBraceDoesNotSwallowTheNextPlaceholder()
+        {
+            // Regression: the scanner used to search for the next '}' from any '{', so a stray
+            // brace consumed everything up to the close of a *later* placeholder - the share
+            // then went out containing the literal text "{PASSWORD}" instead of the password.
+            string result = SecretComposer.Compose("costs {100 and up\r\n{PASSWORD}", Fields(password: "hunter2"));
+            Assert.Equal("costs {100 and up\r\nhunter2", result);
+        }
+
+        [Fact]
+        public void SeveralStrayBraces_StillLeaveLaterPlaceholdersIntact()
+        {
+            string result = SecretComposer.Compose("{ { {USERNAME} }", Fields());
+            Assert.Equal("{ { alice }", result);
+        }
+
+        [Fact]
         public void EmptyBraces_AreLeftLiteral()
         {
             string result = SecretComposer.Compose("a{}b", Fields());
@@ -87,6 +104,25 @@ namespace OneTimeSecret.Tests
         {
             string result = SecretComposer.Compose("{PASSWORD}", Fields(password: "Pässwörd-Ümlaut-ß!"));
             Assert.Equal("Pässwörd-Ümlaut-ß!", result);
+        }
+
+        [Fact]
+        public void LoneLineFeeds_AreRaisedToCrLf()
+        {
+            // The plugin config is XML, and XML parsing collapses CRLF to a bare LF. A
+            // WinForms multi-line TextBox only breaks on CRLF, so a template round-tripped
+            // through config renders as one run-on line unless it is normalized on read.
+            Assert.Equal("{USERNAME}\r\n{PASSWORD}",
+                SecretComposer.NormalizeNewLines("{USERNAME}\n{PASSWORD}"));
+
+            Assert.Equal("{USERNAME}\r\n\r\n{PASSWORD}",
+                SecretComposer.NormalizeNewLines("{USERNAME}\n\n{PASSWORD}"));
+        }
+
+        [Fact]
+        public void AlreadyNormalizedText_IsUnchanged()
+        {
+            Assert.Equal("a\r\nb", SecretComposer.NormalizeNewLines("a\r\nb"));
         }
 
         [Fact]
