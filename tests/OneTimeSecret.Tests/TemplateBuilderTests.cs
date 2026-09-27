@@ -165,5 +165,50 @@ namespace OneTimeSecret.Tests
             };
             Assert.Equal("costs {100 and up\r\n\r\npw", SecretComposer.Compose(template, values));
         }
+
+        [Fact]
+        public void FieldsPresentIn_ReadsFromTheActualTemplateTextNotCheckboxState()
+        {
+            // Quick Share has no checkboxes of its own - it reads the template directly,
+            // since the template stays hand-editable and can diverge from any separately
+            // tracked "include" flags (found by testing: a cleared template with stale
+            // checkbox state still claimed fields that were not actually in the template).
+            TemplateFields fields = TemplateBuilder.FieldsPresentIn("{USERNAME}\r\n{PASSWORD}");
+
+            Assert.False(fields.Title);
+            Assert.True(fields.UserName);
+            Assert.True(fields.Password);
+            Assert.False(fields.Url);
+            Assert.False(fields.Notes);
+        }
+
+        [Fact]
+        public void FieldsPresentIn_OnAnEmptyTemplate_ReportsNoFields()
+        {
+            Assert.False(TemplateBuilder.FieldsPresentIn("").Any);
+            Assert.False(TemplateBuilder.FieldsPresentIn(null).Any);
+        }
+
+        [Fact]
+        public void FieldsPresentIn_DetectsAllFiveKnownPlaceholders()
+        {
+            string template = TemplateBuilder.Build(Fields(
+                title: true, user: true, password: true, url: true, notes: true));
+
+            TemplateFields fields = TemplateBuilder.FieldsPresentIn(template);
+
+            Assert.True(fields.Title);
+            Assert.True(fields.UserName);
+            Assert.True(fields.Password);
+            Assert.True(fields.Url);
+            Assert.True(fields.Notes);
+        }
+
+        [Fact]
+        public void FieldsPresentIn_DetectsTheMessageToken()
+        {
+            string template = TemplateBuilder.Build(Fields(password: true, message: true));
+            Assert.True(TemplateBuilder.FieldsPresentIn(template).Message);
+        }
     }
 }

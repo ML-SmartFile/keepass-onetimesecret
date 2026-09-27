@@ -19,7 +19,9 @@ namespace OneTimeSecret
     {
         private IPluginHost m_host;
         private ToolStripMenuItem m_entryMenuItem;
+        private ToolStripMenuItem m_quickShareMenuItem;
         private ToolStripMenuItem m_burnMenuItem;
+        private bool m_quickShareInFlight;
 
         public override bool Initialize(IPluginHost host)
         {
@@ -55,6 +57,10 @@ namespace OneTimeSecret
                 m_entryMenuItem.Click += OnShareClick;
                 root.DropDownItems.Add(m_entryMenuItem);
 
+                m_quickShareMenuItem = new ToolStripMenuItem("Quick Share…");
+                m_quickShareMenuItem.Click += OnQuickShareClick;
+                root.DropDownItems.Add(m_quickShareMenuItem);
+
                 m_burnMenuItem = new ToolStripMenuItem("Burn Last Share…");
                 m_burnMenuItem.Click += OnBurnClick;
                 root.DropDownItems.Add(m_burnMenuItem);
@@ -85,6 +91,12 @@ namespace OneTimeSecret
 
             bool singleSelected = (m_host.MainWindow.GetSelectedEntriesCount() == 1);
             m_entryMenuItem.Enabled = singleSelected;
+
+            // Quick Share shares the same single-selection gate as Share, plus it must
+            // never be clickable again while one is already in flight - there is no
+            // dialog open to disable inputs on, unlike Share and Burn.
+            if (m_quickShareMenuItem != null)
+                m_quickShareMenuItem.Enabled = singleSelected && !m_quickShareInFlight;
 
             if (m_burnMenuItem == null) return;
 
@@ -228,6 +240,163 @@ namespace OneTimeSecret
                     GlobalWindowManager.RemoveWindow(form);
                 }
             }
+        }
+
+        /// <summary>
+        /// Shares immediately using the configured defaults - no ShareForm. Requested as a
+        /// backlog item (ROADMAP.md): the full dialog is right when composing a share
+        /// deliberately, but it is friction for "send this entry as configured". Still
+        /// satisfies SPEC.md section 2's confirmation requirement (exact host and exact
+        /// fields, before any request) with one dialog rather than zero, still opens
+        /// ResultForm (a generated passphrase and the receipt link exist nowhere else),
+        /// and still gates on the anonymous-fallback warning - the three invariants the
+        /// backlog note flagged as non-negotiable for this path.
+        /// </summary>
+        private void OnQuickShareClick(object sender, EventArgs e)
+        {
+            MainForm mainWindow = (m_host != null) ? m_host.MainWindow : null;
+            if (mainWindow == null) return;
+
+            if (m_quickShareInFlight) return;
+
+            PwEntry entry = mainWindow.GetSelectedEntry(true);
+            if (entry == null) return;
+
+            var config = new PluginConfig(m_host.CustomConfig);
+
+            Dictionary<string, string> fields;
+            Uri baseUri;
+            OtsCredentials credentials;
+            try
+            {
+                fields = EntryFieldReader.ReadResolvedFields(entry, m_host.Database);
+                baseUri = UrlPolicy.Validate(config.BaseUrl, config.AllowInsecureHttp);
+
+                CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database);
+                if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning))
+                    return;
+
+                credentials = resolution.Credentials;
+            }
+            catch (UrlPolicyException ex)
+            {
+                ShowError(mainWindow, ex.Message +
+                    Environment.NewLine + Environment.NewLine +
+                    "Fix it under Tools > OneTimeSecret > Options.");
+                return;
+            }
+
+            // Read from the actual template text, not the last-used checkbox state: the
+            // template stays directly editable in Options, so the two can diverge - a hand-
+            // cleared template with stale "include" flags still set would otherwise confirm
+            // fields that are not actually in what gets sent. Found by testing: clearing the
+            // template left this check (and the confirmation text below) still claiming
+            // "user name, password" while the real request would have been empty.
+            TemplateFields templateFields = TemplateBuilder.FieldsPresentIn(config.Template);
+
+            if (!templateFields.Any)
+            {
+                ShowError(mainWindow, "The configured template has no recognized fields in " +
+                    "it, so there is nothing to confirm sharing. Check the template under " +
+                    "Tools > OneTimeSecret > Options.");
+                return;
+            }
+
+            string entryTitle = entry.Strings.ReadSafe(PwDefs.TitleField);
+            if (string.IsNullOrEmpty(entryTitle)) entryTitle = "this entry";
+
+            DialogResult confirm = MessageBox.Show(mainWindow,
+                "Share " + DescribeIncludedFields(templateFields) + " from \"" + entryTitle +
+                "\"" + Environment.NewLine + "with " + baseUri.Host + "?",
+                "OneTimeSecret - Quick Share", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+            if (confirm != DialogResult.OK) return;
+
+            // Quick Share has no message input, so a {MESSAGE} token - unusual, but
+            // reachable if the template was hand-edited to include one - must resolve to
+            // nothing rather than leak the literal token text into the shared secret.
+            var compositionValues = new Dictionary<string, string>(fields, StringComparer.OrdinalIgnoreCase);
+            compositionValues[SecretComposer.FieldMessage] = string.Empty;
+            string composed = SecretComposer.Compose(config.Template, compositionValues);
+
+            PassphraseMode mode = config.PassphraseMode;
+            string passphrase = null;
+            if (mode == PassphraseMode.Generate || mode == PassphraseMode.Manual)
+            {
+                // Manual needs a per-share prompt Quick Share has no dialog to show, so it
+                // falls back to generating one instead - still protected, just not the
+                // exact configured mode.
+                passphrase = PassphraseGenerator.Generate(m_host);
+            }
+            else if (mode == PassphraseMode.Entry)
+            {
+                PassphraseResolution stored = PassphraseResolver.Resolve(config, m_host.Database);
+                if (stored.Warning != null)
+                {
+                    ShowError(mainWindow, stored.Warning);
+                    return;
+                }
+                passphrase = stored.Passphrase;
+            }
+
+            IWebProxy proxy = ProxyResolver.Resolve();
+            int timeoutMs = OtsClientV1.DefaultTimeoutMs;
+            Func<CancellationToken, IOtsClient> createClient =
+                BuildClientFactory(config, baseUri, credentials, proxy, timeoutMs);
+
+            var request = new ShareRequest(composed, config.DefaultTtlSeconds, passphrase, null);
+
+            m_quickShareInFlight = true;
+            mainWindow.SetStatusEx("Sharing via OneTimeSecret...");
+
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                ShareResult result = null;
+                Exception failure = null;
+                try
+                {
+                    result = createClient(CancellationToken.None).Share(request, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+
+                mainWindow.Invoke(new MethodInvoker(delegate
+                {
+                    m_quickShareInFlight = false;
+                    mainWindow.SetStatusEx(null);
+
+                    if (failure != null)
+                    {
+                        string message = (failure is OtsException)
+                            ? failure.Message
+                            : "Unexpected error while sharing (" + failure.GetType().Name + "): " + failure.Message;
+                        ShowError(mainWindow, message);
+                        return;
+                    }
+
+                    if (config.WriteBackReceipt) WriteBackReceipt(mainWindow, entry, result);
+
+                    OnShareSucceeded(mainWindow, result, passphrase, entry);
+                }));
+            });
+        }
+
+        private static string DescribeIncludedFields(TemplateFields fields)
+        {
+            var names = new List<string>(5);
+            if (fields.Title) names.Add("title");
+            if (fields.UserName) names.Add("user name");
+            if (fields.Password) names.Add("password");
+            if (fields.Url) names.Add("URL");
+            if (fields.Notes) names.Add("notes");
+
+            if (names.Count == 0) return string.Empty;
+            if (names.Count == 1) return names[0];
+            if (names.Count == 2) return names[0] + " and " + names[1];
+
+            string allButLast = string.Join(", ", names.GetRange(0, names.Count - 1).ToArray());
+            return allButLast + ", and " + names[names.Count - 1];
         }
 
         private void OnOptionsClick(object sender, EventArgs e)

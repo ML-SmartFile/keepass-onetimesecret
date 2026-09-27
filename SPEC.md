@@ -157,6 +157,10 @@ public override ToolStripMenuItem GetMenuItem(PluginMenuType t)
         share.Click += OnShareClick;
         root.DropDownItems.Add(share);
 
+        var quickShare = new ToolStripMenuItem("Quick Share…");
+        quickShare.Click += OnQuickShareClick;
+        root.DropDownItems.Add(quickShare);
+
         var burn = new ToolStripMenuItem("Burn Last Share…");
         burn.Click += OnBurnClick;
         root.DropDownItems.Add(burn);
@@ -471,6 +475,28 @@ OTS account email, `Password` is the API token. The options dialog offers an ent
    a **protected** custom string field `OTS Receipt` on the entry, enabling
    **OneTimeSecret → Burn Last Share…** from that entry's own context menu, right below
    Share. Only enabled when the field is present; burning removes it again on success.
+
+### Quick Share
+
+**OneTimeSecret → Quick Share…**, right below Share in the same submenu, shares
+immediately using the configured defaults (field checkboxes, template, lifetime,
+passphrase mode) without opening `ShareForm` — the dialog is right when composing a
+share deliberately, but it is friction for "send this entry as configured". Three
+invariants from elsewhere in this spec still apply and are not relaxed for this path:
+
+- **Section 2's confirmation requirement still holds.** One `MessageBox` (entry title,
+  the exact field list, the exact target host, OK/Cancel) stands in for `ShareForm`'s
+  own confirmation — one dialog instead of zero, never zero.
+- **`ResultForm` still opens.** A generated passphrase and the receipt link exist
+  nowhere else; skipping it would destroy them.
+- **The anonymous-fallback warning still fires** if the configured credential entry is
+  missing or unreadable, exactly as it does before `ShareForm` opens.
+
+`PassphraseMode.Manual` cannot be honoured — there is no dialog to type a passphrase
+into — so Quick Share generates one instead, same protection, just not the exact
+configured mode. No progress dialog exists either; the menu item disables itself for
+the duration (`MainForm.SetStatusEx` shows progress in the status bar instead) and
+there is no cancel — the request is short enough that one was not built.
 
 ---
 
