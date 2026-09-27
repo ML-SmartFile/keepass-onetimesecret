@@ -183,6 +183,35 @@ one's acceptance criteria are met and manually verified in a running KeePass.
 
 ---
 
+## Backlog — requested, not yet scheduled
+
+### Quick Share with OneTimeSecret
+
+A second entry-context-menu item that shares immediately using the configured defaults —
+template, lifetime, passphrase mode — without opening `ShareForm`. Requested 2026-09-24:
+the full dialog is right when composing a share deliberately, but it is friction for the
+common case of "send this entry as configured".
+
+Roughly the M1/M2 behaviour, which M3 replaced with the dialog, so the plumbing already
+existed once and can be recovered from git history.
+
+**Design tensions to resolve before building it — do not just skip the dialog:**
+
+- **`SPEC.md` §2 requires that "the confirmation dialog must display the exact target host
+  and the exact fields being transmitted before any request is made."** A quick share
+  bypasses exactly that. Either the invariant gets an explicit, documented exception for
+  this path, or quick share needs a minimal confirmation (host + field list + Share/Cancel)
+  that is still one keystroke. Silently dropping a stated security invariant is not an
+  option.
+- **The result dialog cannot be skipped too.** If `GeneratePassphrase` is on, a quick share
+  still generates one, and the passphrase exists nowhere else — skipping `ResultForm` would
+  destroy it and leave a share nobody can open. Same for the receipt link.
+- **The anonymous-fallback warning must still fire.** A deleted or emptied credential entry
+  silently downgrading a "quick" share to anonymous is worse here than in the dialog path,
+  because there is no other moment where the user would notice.
+
+---
+
 ## Progress notes
 
 Append a dated line per milestone as it completes, including anything that turned out

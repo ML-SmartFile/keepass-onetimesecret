@@ -326,13 +326,30 @@ Stored via `m_host.CustomConfig`, except credentials.
 | `OneTimeSecret.IncludePassword` | bool | `true` | Field checkbox default |
 | `OneTimeSecret.IncludeUrl` | bool | `false` | Field checkbox default |
 | `OneTimeSecret.IncludeNotes` | bool | `false` | Field checkbox default |
-| `OneTimeSecret.CustomMessage` | string | `""` | Literal text prepended to the field block, separated by a blank line when non-empty. Spliced into the template *before* `SprEngine.Compile` runs, so `{...}`-shaped text the user types here is interpreted as a placeholder like any other template text — call this out in the UI |
-| `OneTimeSecret.GeneratePassphrase` | bool | `true` | Uses KeePass `PwGenerator` |
+| `OneTimeSecret.PassphraseMode` | string | `generate` | `none` \| `generate` \| `manual` \| `entry`. Only the *mode* is stored — `manual` preselects "Enter one each time" with an empty box. A stored passphrase would be a stored secret |
+| `OneTimeSecret.PassphraseEntryUuid` | string | empty | Hex `PwUuid` of the entry whose **Password** field supplies the passphrase when the mode is `entry`. A reference, never the passphrase |
 | `OneTimeSecret.WriteBackReceipt` | bool | `false` | |
 | `OneTimeSecret.AllowInsecureHttp` | bool | `false` | Loopback only even when true |
 
 **Credentials** live in the entry referenced by `CredentialEntryUuid`: `UserName` is the
 OTS account email, `Password` is the API token. The options dialog offers an entry picker.
+
+> **The custom message is deliberately absent from this table.** An earlier revision
+> persisted it as `OneTimeSecret.CustomMessage`, which was wrong twice over: the generated
+> template containing the message was written back as well, corrupting the stored default
+> template, and a note written for one recipient then prefilled the next share to someone
+> else. A message is per-share by nature. `ShareForm` starts with an empty message every
+> time, and neither the message nor the template it generates is written back — the options
+> dialog is the only place the default template is set.
+>
+> Field checkboxes, passphrase mode and lifetime *are* durable preferences and are persisted.
+
+> **On `entry` mode.** A passphrase read from a database entry is reused across every share,
+> which is materially weaker than generating one per share: anyone who received an earlier
+> share can open every later one, and it never rotates. It is only sensible with a single
+> counterparty you agreed it with out of band. The UI labels the tradeoff rather than hiding
+> it, and the mode is never the default. Selecting it without naming an entry is rejected at
+> the options dialog, because the alternative is discovering it at the moment of sharing.
 
 ---
 
@@ -344,8 +361,13 @@ OTS account email, `Password` is the API token. The options dialog offers an ent
      matching `SprEngine` built-in placeholder (`{TITLE}`, `{USERNAME}`, `{PASSWORD}`,
      `{URL}`, `{NOTES}`). Checking/unchecking regenerates the template below via
      `TemplateBuilder`, joining checked placeholders with `\n` in that fixed order.
-   - A custom message box. When non-empty, its literal text is prepended to the
-     placeholder block, separated by a blank line.
+   - A custom message box. When non-empty, the template gains a `{MESSAGE}` token above
+     the field block, separated by a blank line — **the message text itself never appears
+     in the template.** Two reasons, both learned the hard way: showing the text in both
+     boxes at once reads as duplication and confuses people about which one is authoritative,
+     and making the message a *substituted value* rather than template text means
+     `SecretComposer` never rescans it, so braces the user types in a message stay literal
+     instead of silently expanding into another field's value.
    - Content template, with a live preview of the exact text to be transmitted
      (masked by default, with a "show" toggle). Directly editable; the next checkbox
      or message change regenerates and overwrites manual edits, so the UI must make
@@ -374,6 +396,7 @@ OTS account email, `Password` is the API token. The options dialog offers an ent
 | 404 on a v2 endpoint | Re-run capability detection once, then retry as v1 |
 | 429 | Surface the rate-limit message; suggest configuring credentials if anonymous |
 | 400 / 422 | Show `error`; if the field is `ttl`, note that anonymous TTL is capped |
+| **Over-long TTL** | **Not an error at all — the server clamps silently. Read the applied lifetime back and tell the user.** See below |
 | Timeout / DNS | Plain network error; do not retry automatically |
 | TLS failure | Explicit message; never offer to disable validation |
 
@@ -384,6 +407,15 @@ OTS account email, `Password` is the API token. The options dialog offers an ent
 > useful without it. Because a 404 there is equally consistent with a base URL that has no v1
 > API, the wording names both causes and drops the credential explanation when the request was
 > anonymous. The 401/403 row is retained for self-hosted instances that do use it.
+>
+> **The anonymous TTL cap is enforced by silent clamping, not by an error.** Requests for
+> 30 days, 1 year and 10 years all returned HTTP 200 with `ttl` and `secret_ttl` set to
+> **604800** (7 days). The `400/422 field == "ttl"` row above is therefore unreachable on the
+> hosted service, and the real hazard is the opposite of an error: the user picks 30 days,
+> sees a success dialog, and believes the link lives 30 days when it dies after 7. The client
+> reads `secret_ttl` (falling back to `ttl`) back from the response and the result dialog
+> states the lifetime actually applied, calling it out when it is shorter than requested. A
+> response that omits the field is treated as *unknown*, never as shortened.
 
 Default HTTP timeout: 20 seconds. Set `ServicePointManager.SecurityProtocol` to include
 TLS 1.2 and 1.3 explicitly at plugin init — older KeePass/.NET combinations still
