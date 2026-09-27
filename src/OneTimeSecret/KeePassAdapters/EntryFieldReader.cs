@@ -42,5 +42,17 @@ namespace OneTimeSecret.KeePassAdapters
 
             return SprEngine.Compile(raw, ctx) ?? string.Empty;
         }
+
+        /// <summary>
+        /// Resolves a single field with the same non-active placeholder policy. Used for
+        /// credentials, which may themselves be stored as {REF:...} into another entry.
+        /// </summary>
+        public static string ReadResolvedField(PwEntry entry, PwDatabase database, string fieldName)
+        {
+            if (entry == null) throw new ArgumentNullException("entry");
+
+            var ctx = new SprContext(entry, database, SprCompileFlags.NonActive);
+            return Resolve(entry, fieldName, ctx);
+        }
     }
 }

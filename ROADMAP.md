@@ -71,6 +71,14 @@ one's acceptance criteria are met and manually verified in a running KeePass.
 - Deleting the referenced credential entry degrades to anonymous with a clear warning,
   not a crash
 
+> **Deliberate scope choices, so the dialog never looks more functional than it is.** The
+> API-version dropdown offers `auto` and `v1` only — no v2 client exists until M4, and
+> offering it would silently hand back v1. The passphrase checkbox persists
+> `GeneratePassphrase` but is labelled "(takes effect in a later version)" because nothing
+> consumes it until M3. The template stays a plain text box; the field checkboxes and
+> custom-message box from `SPEC.md` §7 are M3's `TemplateBuilder`, though `PluginConfig`
+> already persists their keys.
+
 ---
 
 ## M3 — Share dialog and error handling
@@ -231,3 +239,33 @@ to the real password, umlauts surviving the round trip, and a responsive UI.
   `SPEC.md` §3 calls welcome.
 - `IOtsClient` is synchronous (`Share`, not `ShareAsync`) and runs on a thread-pool thread.
   Async plumbing waits for M3, where cancellation actually lands.
+
+<!-- M2: -->
+**M2 — 2026-09-24.** Config, options dialog and authenticated shares. All acceptance
+criteria smoke-tested by the user except the authenticated share itself, which waits on a
+real OTS account.
+
+- **Rejected credentials return 404, not 401/403** on the hosted v1 API, and the body is
+  *inconsistent* — observed both empty and carrying `Not authorized`. `SPEC.md` §8 had no
+  404 row for v1 (its 404 row was about v2 detection), so the auth handler never fired and
+  the user saw a bare "HTTP 404". §8 now records the verified behaviour; the message names
+  both real causes (rejected credentials *or* a base URL with no v1 API) and drops the
+  credential wording when the request was anonymous.
+- **Verified directly in `KeePass.config.xml`:** the only credential-related value written
+  is `CredentialEntryUuid`, a hex `PwUuid`. The entry's password and username, the database
+  master password, and the base64 Basic-auth form are all absent, and no stray files are
+  created.
+- **`CustomConfig` preserves CRLF inside values** — the two-line template round-trips
+  byte-for-byte as `{USERNAME}\r\n{PASSWORD}`.
+- **Settings are written on clean exit only.** Killing KeePass loses them; the restart test
+  must use a proper exit.
+- **`KeePass.Forms.OptionsForm` already exists**, so `Ui.OptionsForm` must be qualified at
+  its use site. Do not "simplify" that away.
+- **`ListViewForm` was rejected as the entry picker.** It exists and looks native, but its
+  `InitEx(..., List<object>, ...)` data contract is undocumented and could not be verified
+  without driving the UI, so the picker is hand-rolled per `BOOTSTRAP.md`.
+- Two UI defects found by reading screenshots rather than by testing: the multi-line
+  template box opened scrolled past its first line (making a two-line template look like
+  one), and the picker was parented to the main window instead of the options dialog.
+- `AceCustomConfig` offers only `GetString`/`GetBool`/`GetLong`/`GetULong` and their
+  setters — no typed dates, hence the ISO-8601 round-trip for `DetectedAt`.

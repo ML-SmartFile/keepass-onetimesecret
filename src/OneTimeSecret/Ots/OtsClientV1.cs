@@ -15,18 +15,23 @@ namespace OneTimeSecret.Ots
 
         private readonly Uri m_baseUri;
         private readonly IHttpTransport m_transport;
+        private readonly OtsCredentials m_credentials;
         private readonly int m_timeoutMs;
 
         public OtsClientV1(Uri baseUri, IHttpTransport transport)
-            : this(baseUri, transport, DefaultTimeoutMs) { }
+            : this(baseUri, transport, OtsCredentials.Anonymous, DefaultTimeoutMs) { }
 
-        public OtsClientV1(Uri baseUri, IHttpTransport transport, int timeoutMs)
+        public OtsClientV1(Uri baseUri, IHttpTransport transport, OtsCredentials credentials)
+            : this(baseUri, transport, credentials, DefaultTimeoutMs) { }
+
+        public OtsClientV1(Uri baseUri, IHttpTransport transport, OtsCredentials credentials, int timeoutMs)
         {
             if (baseUri == null) throw new ArgumentNullException("baseUri");
             if (transport == null) throw new ArgumentNullException("transport");
 
             m_baseUri = baseUri;
             m_transport = transport;
+            m_credentials = credentials ?? OtsCredentials.Anonymous;
             m_timeoutMs = timeoutMs;
         }
 
@@ -42,7 +47,8 @@ namespace OneTimeSecret.Ots
             {
                 body = BuildFormBody(request);
                 response = m_transport.Post(
-                    endpoint, "application/x-www-form-urlencoded", body, m_timeoutMs);
+                    endpoint, "application/x-www-form-urlencoded", body,
+                    BasicAuth.Header(m_credentials), m_timeoutMs);
             }
             catch (HttpTransportException ex)
             {
@@ -55,7 +61,7 @@ namespace OneTimeSecret.Ots
                 if (body != null) Array.Clear(body, 0, body.Length);
             }
 
-            if (!response.IsSuccess) throw TranslateHttpError(response);
+            if (!response.IsSuccess) throw TranslateHttpError(response, m_credentials.IsAnonymous);
 
             return ParseShareResponse(response.Body);
         }
@@ -126,7 +132,7 @@ namespace OneTimeSecret.Ots
             }
         }
 
-        private static OtsException TranslateHttpError(HttpResult response)
+        private static OtsException TranslateHttpError(HttpResult response, bool isAnonymous)
         {
             string serverMessage, errorField, requestId;
             ReadErrorBody(response.Body, out serverMessage, out errorField, out requestId);
@@ -136,19 +142,43 @@ namespace OneTimeSecret.Ots
             {
                 case 401:
                 case 403:
-                    message = "OneTimeSecret rejected the request. Check your OneTimeSecret credentials.";
+                    message = isAnonymous
+                        ? "OneTimeSecret refused an anonymous share. Configure an account and " +
+                          "API token in the OneTimeSecret options."
+                        : "OneTimeSecret rejected your credentials. Check the account and API " +
+                          "token in the OneTimeSecret options.";
+                    break;
+
+                case 404:
+                    // Verified against eu.onetimesecret.com: invalid credentials come back as
+                    // 404, not 401/403, and the body is sometimes empty and sometimes carries
+                    // "Not authorized" - so this must not depend on the body. A 404 here is
+                    // equally consistent with a base URL that has no v1 API, hence both causes.
+                    message = isAnonymous
+                        ? "OneTimeSecret could not find the share endpoint. Check the base URL in " +
+                          "the OneTimeSecret options - this instance may not offer the v1 API."
+                        : "OneTimeSecret could not find the share endpoint. This usually means the " +
+                          "account or API token was rejected, but it can also mean the base URL is " +
+                          "wrong. Check both in the OneTimeSecret options.";
                     break;
 
                 case 429:
-                    message = "OneTimeSecret rate-limited this request. Anonymous shares have a lower " +
-                              "limit - configuring an API token raises it.";
+                    message = "OneTimeSecret rate-limited this request.";
+                    if (isAnonymous)
+                        message += " Anonymous shares have a lower limit - configuring an API " +
+                                   "token in the options raises it.";
                     break;
 
                 case 400:
                 case 422:
                     message = "OneTimeSecret rejected the request.";
                     if (string.Equals(errorField, "ttl", StringComparison.OrdinalIgnoreCase))
-                        message += " The requested lifetime is too long; anonymous shares have a capped TTL.";
+                    {
+                        message += " The requested lifetime is too long";
+                        message += isAnonymous
+                            ? "; anonymous shares have a capped TTL."
+                            : " for this account.";
+                    }
                     break;
 
                 default:

@@ -22,11 +22,16 @@ namespace OneTimeSecret.Tests
             public string LastContentType { get; private set; }
             public string LastBodyText { get; private set; }
             public byte[] LastBodyBuffer { get; private set; }
+            public string LastAuthorization { get; private set; }
+            public bool WasCalled { get; private set; }
 
-            public HttpResult Post(Uri uri, string contentType, byte[] body, int timeoutMs)
+            public HttpResult Post(Uri uri, string contentType, byte[] body,
+                string authorizationHeader, int timeoutMs)
             {
+                WasCalled = true;
                 LastUri = uri;
                 LastContentType = contentType;
+                LastAuthorization = authorizationHeader;
                 LastBodyBuffer = body;                              // kept to observe scrubbing
                 LastBodyText = Encoding.UTF8.GetString(body);       // snapshot before the caller zeroes it
 
@@ -164,7 +169,10 @@ namespace OneTimeSecret.Tests
             var transport = new StubTransport(new HttpResult(status, ""));
             var ex = Assert.Throws<OtsException>(() => Client(transport).Share(new ShareRequest(Secret, 86400)));
 
-            Assert.Contains("credentials", ex.Message, StringComparison.OrdinalIgnoreCase);
+            // The exact wording differs for anonymous vs authenticated and is asserted in
+            // Share_AuthFailureMessageDependsOnWhetherCredentialsWereSent; here we only care
+            // that the user is pointed somewhere actionable and the status survives.
+            Assert.Contains("options", ex.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(status, ex.StatusCode);
         }
 
@@ -244,6 +252,131 @@ namespace OneTimeSecret.Tests
 
                 Assert.DoesNotContain("Pässwörd", ex.ToString());
                 Assert.DoesNotContain("alice", ex.ToString());
+            }
+        }
+
+        [Fact]
+        public void Share_SendsNoAuthorizationHeaderWhenAnonymous()
+        {
+            var transport = Success();
+            new OtsClientV1(new Uri("https://eu.onetimesecret.com"), transport, OtsCredentials.Anonymous)
+                .Share(new ShareRequest(Secret, 86400));
+
+            Assert.Null(transport.LastAuthorization);
+        }
+
+        [Fact]
+        public void Share_SendsBasicAuthWhenCredentialsAreConfigured()
+        {
+            var transport = Success();
+            var credentials = new OtsCredentials("me@example.com", "tok3n");
+
+            new OtsClientV1(new Uri("https://eu.onetimesecret.com"), transport, credentials)
+                .Share(new ShareRequest(Secret, 86400));
+
+            Assert.Equal("Basic " + Convert.ToBase64String(
+                Encoding.UTF8.GetBytes("me@example.com:tok3n")), transport.LastAuthorization);
+        }
+
+        [Fact]
+        public void Share_TreatsAPartiallyFilledCredentialAsAnonymous()
+        {
+            // A token without an account (or vice versa) cannot authenticate; sending a
+            // half-built header would just produce a confusing 401.
+            var transport = Success();
+            new OtsClientV1(new Uri("https://eu.onetimesecret.com"), transport,
+                    new OtsCredentials("me@example.com", ""))
+                .Share(new ShareRequest(Secret, 86400));
+
+            Assert.Null(transport.LastAuthorization);
+        }
+
+        [Fact]
+        public void Share_AuthFailureMessageDependsOnWhetherCredentialsWereSent()
+        {
+            var anonymous = new StubTransport(new HttpResult(401, ""));
+            string anonMessage = Assert.Throws<OtsException>(() =>
+                Client(anonymous).Share(new ShareRequest(Secret, 86400))).Message;
+            Assert.Contains("anonymous", anonMessage, StringComparison.OrdinalIgnoreCase);
+
+            var authed = new StubTransport(new HttpResult(401, ""));
+            string authedMessage = Assert.Throws<OtsException>(() =>
+                new OtsClientV1(new Uri("https://eu.onetimesecret.com"), authed,
+                        new OtsCredentials("me@example.com", "tok3n"))
+                    .Share(new ShareRequest(Secret, 86400))).Message;
+            Assert.Contains("rejected your credentials", authedMessage, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Share_OnlySuggestsATokenForRateLimitsWhenAnonymous()
+        {
+            var anonymous = new StubTransport(new HttpResult(429, ""));
+            string anonMessage = Assert.Throws<OtsException>(() =>
+                Client(anonymous).Share(new ShareRequest(Secret, 86400))).Message;
+            Assert.Contains("API token", anonMessage, StringComparison.OrdinalIgnoreCase);
+
+            var authed = new StubTransport(new HttpResult(429, ""));
+            string authedMessage = Assert.Throws<OtsException>(() =>
+                new OtsClientV1(new Uri("https://eu.onetimesecret.com"), authed,
+                        new OtsCredentials("me@example.com", "tok3n"))
+                    .Share(new ShareRequest(Secret, 86400))).Message;
+            Assert.DoesNotContain("API token", authedMessage, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Share_Explains404AsCredentialsOrBaseUrlDependingOnContext()
+        {
+            // eu.onetimesecret.com rejects bad credentials with 404, not 401/403, and the body
+            // is sometimes empty - so the message must stand on its own.
+            var authed = new StubTransport(new HttpResult(404, ""));
+            string authedMessage = Assert.Throws<OtsException>(() =>
+                new OtsClientV1(new Uri("https://eu.onetimesecret.com"), authed,
+                        new OtsCredentials("me@example.com", "wrong-token"))
+                    .Share(new ShareRequest(Secret, 86400))).Message;
+
+            Assert.Contains("API token", authedMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("base URL", authedMessage, StringComparison.OrdinalIgnoreCase);
+
+            // Anonymous cannot have had its credentials rejected, so don't imply it did.
+            var anonymous = new StubTransport(new HttpResult(404, ""));
+            string anonMessage = Assert.Throws<OtsException>(() =>
+                Client(anonymous).Share(new ShareRequest(Secret, 86400))).Message;
+
+            Assert.Contains("base URL", anonMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("API token was rejected", anonMessage, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Share_AppendsTheServerMessageWhenThe404CarriesOne()
+        {
+            var transport = new StubTransport(new HttpResult(404, "{\"message\":\"Not authorized\"}"));
+            string message = Assert.Throws<OtsException>(() =>
+                new OtsClientV1(new Uri("https://eu.onetimesecret.com"), transport,
+                        new OtsCredentials("me@example.com", "wrong-token"))
+                    .Share(new ShareRequest(Secret, 86400))).Message;
+
+            Assert.Contains("Not authorized", message);
+        }
+
+        [Fact]
+        public void Share_NeverPutsTheApiTokenInAnErrorMessage()
+        {
+            var credentials = new OtsCredentials("me@example.com", "sup3r-s3cret-token");
+            var cases = new IHttpTransport[]
+            {
+                new StubTransport(new HttpResult(401, "")),
+                new StubTransport(new HttpResult(429, "")),
+                new StubTransport(new HttpResult(500, "<html>boom</html>")),
+                new StubTransport(new HttpTransportException(HttpFailureKind.Tls, "x", null)),
+            };
+
+            foreach (IHttpTransport transport in cases)
+            {
+                var ex = Assert.ThrowsAny<Exception>(() =>
+                    new OtsClientV1(new Uri("https://eu.onetimesecret.com"), transport, credentials)
+                        .Share(new ShareRequest(Secret, 86400)));
+
+                Assert.DoesNotContain("sup3r-s3cret-token", ex.ToString());
             }
         }
     }
