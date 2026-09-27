@@ -298,3 +298,43 @@ real OTS account.
   one), and the picker was parented to the main window instead of the options dialog.
 - `AceCustomConfig` offers only `GetString`/`GetBool`/`GetLong`/`GetULong` and their
   setters — no typed dates, hence the ISO-8601 round-trip for `DetectedAt`.
+
+<!-- M3: -->
+**M3 — 2026-09-27.** `ShareForm`, four passphrase modes, cancellation, and the full §8
+error mapping. All acceptance criteria smoke-tested by the user against the live
+`eu.onetimesecret.com`, including cancel-leaves-nothing-on-clipboard and the passphrase/
+copy-button independence. Two rows are accepted as verified by design rather than by
+observation: locking the database mid-request is unreachable through the UI as built
+(`ShareForm` is modal and registered with `GlobalWindowManager`, so KeePass's own menus,
+Lock Workspace included, are unreachable while it's open), and KeePass proxy settings are
+read from `AceIntegration` but have not been exercised against a real configured proxy.
+
+- **The v1 anonymous TTL cap is enforced by silent clamping, not an error.** 30-day,
+  1-year and 10-year requests all returned HTTP 200 with `ttl`/`secret_ttl` clamped to
+  604800 seconds. `SPEC.md` §8's `400/422 field=="ttl"` row is unreachable on the hosted
+  service — the real hazard is the opposite of an error: the user picks a long lifetime,
+  sees success, and believes the link outlives the 7 days it actually gets. `ShareResult`
+  now carries the server's actual applied TTL and `ResultForm` states it, calling out when
+  it was shortened.
+- **`CustomConfig` round-trips a bare LF, not CRLF.** The config is XML; XML parsing
+  collapses CRLF to LF, and a WinForms multi-line `TextBox` only breaks lines on CRLF. A
+  stored two-line template rendered as one run-on line until this was caught by
+  inspection. Fixed by renormalizing to CRLF in `PluginConfig.Template`'s getter.
+- **The custom message is a substituted value (`{MESSAGE}`), never inlined into the
+  template text.** An earlier revision inlined it, which duplicated the same text in both
+  the message box and the template box, and let `SecretComposer` rescan attacker-controlled
+  text — a message containing `{PASSWORD}` would have leaked the password. Substituting it
+  once, like any other field, closed both problems at once. Neither the message nor the
+  regenerated template is ever persisted; only field selection, passphrase mode and
+  lifetime are durable preferences.
+- **Regression caught by the message feature, fixed at the root.** `SecretComposer`'s
+  brace scanner searched forward for the *next* `}` from any `{`, so a stray unmatched
+  brace earlier in the text could swallow a real placeholder and print its literal name
+  instead of its value. Fixed: `{` only opens a placeholder if its `}` arrives before any
+  further `{`.
+- Passphrase is a mode, not a bool: None / Generate / Enter each time / a standing
+  passphrase read from a chosen entry's Password field at share time. Only the mode and,
+  for the last one, an entry reference are ever stored — never passphrase text.
+- "Cancel" becomes "Close" once a request is dispatched — cancellation only stops us
+  waiting, since the server may already have stored the secret, and the label says so
+  rather than implying an undo that cannot happen.
