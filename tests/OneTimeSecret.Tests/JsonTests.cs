@@ -104,5 +104,24 @@ namespace OneTimeSecret.Tests
             Assert.Empty(Json.ParseObject("{}"));
             Assert.Equal(new List<object>(), Json.Parse("[]"));
         }
+
+        [Fact]
+        public void GetObjectOrNull_ReadsANestedObject()
+        {
+            var obj = Json.ParseObject("{\"record\":{\"secret\":{\"key\":\"sk\"}}}");
+            var record = Json.GetObjectOrNull(obj, "record");
+            var secret = Json.GetObjectOrNull(record, "secret");
+
+            Assert.Equal("sk", Json.GetString(secret, "key"));
+        }
+
+        [Fact]
+        public void GetObjectOrNull_ReturnsNullForAbsentOrNonObject()
+        {
+            var obj = Json.ParseObject("{\"n\":123,\"s\":\"text\"}");
+            Assert.Null(Json.GetObjectOrNull(obj, "missing"));
+            Assert.Null(Json.GetObjectOrNull(obj, "n"));
+            Assert.Null(Json.GetObjectOrNull(obj, "s"));
+        }
     }
 }

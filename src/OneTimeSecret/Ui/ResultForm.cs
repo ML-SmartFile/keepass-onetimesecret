@@ -46,6 +46,7 @@ namespace OneTimeSecret.Ui
                        "need from here before closing this window.",
                 Font = new Font(SystemFonts.DialogFont, FontStyle.Bold),
                 ForeColor = Color.FromArgb(160, 60, 0),
+                AutoSize = false,
                 Bounds = new Rectangle(14, y, 546, 34)
             };
             Controls.Add(warning);
@@ -67,10 +68,14 @@ namespace OneTimeSecret.Ui
                         ? new Font(SystemFonts.DialogFont, FontStyle.Bold)
                         : SystemFonts.DialogFont,
                     ForeColor = ttlShortened ? Color.FromArgb(160, 60, 0) : SystemColors.ControlText,
+                    AutoSize = false,
                     Bounds = new Rectangle(14, y, 546, 32)
                 };
                 Controls.Add(lifetime);
-                y += ttlShortened ? 38 : 24;
+                // Same 32-tall box either way now that AutoSize is off - the previous
+                // shortcut of a smaller bump for the unshortened case put the next control
+                // 8px inside this label's own box.
+                y += 38;
             }
 
             Controls.Add(Section("One-time link - already on the clipboard:", y)); y += 22;
@@ -123,6 +128,7 @@ namespace OneTimeSecret.Ui
             {
                 Text = text,
                 Font = new Font(SystemFonts.DialogFont, FontStyle.Bold),
+                AutoSize = false,
                 Bounds = new Rectangle(14, top, 546, 18)
             };
         }
@@ -133,6 +139,7 @@ namespace OneTimeSecret.Ui
             {
                 Text = text,
                 ForeColor = SystemColors.GrayText,
+                AutoSize = false,
                 Bounds = new Rectangle(14, top, 546, 28)
             };
         }

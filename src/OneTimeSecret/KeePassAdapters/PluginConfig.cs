@@ -174,6 +174,18 @@ namespace OneTimeSecret.KeePassAdapters
             set { m_config.SetString(Prefix + "DetectedVersion", value); }
         }
 
+        /// <summary>
+        /// The host <see cref="DetectedVersion"/> was probed against. Capability detection
+        /// is cached per host (SPEC.md section 5); comparing this before trusting the cache
+        /// is what makes a stale detection from a previous BaseUrl harmless when the host
+        /// changes rather than silently wrong.
+        /// </summary>
+        public string DetectedForHost
+        {
+            get { return m_config.GetString(Prefix + "DetectedForHost", string.Empty); }
+            set { m_config.SetString(Prefix + "DetectedForHost", value ?? string.Empty); }
+        }
+
         public DateTime? DetectedAtUtc
         {
             get

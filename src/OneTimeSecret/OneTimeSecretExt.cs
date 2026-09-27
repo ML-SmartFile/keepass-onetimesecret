@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Threading;
 using System.Windows.Forms;
 using KeePass.Forms;
 using KeePass.Plugins;
@@ -18,6 +19,7 @@ namespace OneTimeSecret
     {
         private IPluginHost m_host;
         private ToolStripMenuItem m_entryMenuItem;
+        private ToolStripMenuItem m_burnMenuItem;
 
         public override bool Initialize(IPluginHost host)
         {
@@ -39,8 +41,23 @@ namespace OneTimeSecret
         {
             if (t == PluginMenuType.Entry)
             {
-                m_entryMenuItem = new ToolStripMenuItem("Share with OneTimeSecret…");
+                // A submenu, not a bare item: GetMenuItem hands back exactly one slot per
+                // PluginMenuType, and SPEC.md rules out adding a second item directly to
+                // entryMenu.Items ourselves - KeePass owns that collection, shares it with
+                // every other plugin, and rebuilds it on its own schedule. DropDownItems
+                // belong entirely to the ToolStripMenuItem this method returns, so nesting
+                // Burn under it stays within the one sanctioned integration point while
+                // still keeping both commands on the entry's own right-click menu, not
+                // buried under Tools - found confusing there by the user's own testing.
+                var root = new ToolStripMenuItem("OneTimeSecret");
+
+                m_entryMenuItem = new ToolStripMenuItem("Share…");
                 m_entryMenuItem.Click += OnShareClick;
+                root.DropDownItems.Add(m_entryMenuItem);
+
+                m_burnMenuItem = new ToolStripMenuItem("Burn Last Share…");
+                m_burnMenuItem.Click += OnBurnClick;
+                root.DropDownItems.Add(m_burnMenuItem);
 
                 ContextMenuStrip entryMenu = m_host.MainWindow.EntryContextMenu;
                 if (entryMenu != null)
@@ -49,7 +66,7 @@ namespace OneTimeSecret
                     entryMenu.Opening += OnEntryContextMenuOpening;
                 }
 
-                return m_entryMenuItem;
+                return root;
             }
 
             if (t == PluginMenuType.Main)
@@ -65,7 +82,14 @@ namespace OneTimeSecret
         private void OnEntryContextMenuOpening(object sender, EventArgs e)
         {
             if (m_entryMenuItem == null) return;
-            m_entryMenuItem.Enabled = (m_host.MainWindow.GetSelectedEntriesCount() == 1);
+
+            bool singleSelected = (m_host.MainWindow.GetSelectedEntriesCount() == 1);
+            m_entryMenuItem.Enabled = singleSelected;
+
+            if (m_burnMenuItem == null) return;
+
+            PwEntry entry = singleSelected ? m_host.MainWindow.GetSelectedEntry(true) : null;
+            m_burnMenuItem.Enabled = singleSelected && ReceiptWriter.HasReceipt(entry);
         }
 
         private void OnShareClick(object sender, EventArgs e)
@@ -132,8 +156,7 @@ namespace OneTimeSecret
                 storedPassphrase.Warning,
                 baseUri.Host,
                 delegate { return PassphraseGenerator.Generate(m_host); },
-                delegate { return (IOtsClient)new OtsClientV1(
-                    baseUri, new HttpTransport(proxy), credentials, timeoutMs); }))
+                BuildClientFactory(config, baseUri, credentials, proxy, timeoutMs)))
             {
                 GlobalWindowManager.AddWindow(form);
                 DialogResult answer;
@@ -164,8 +187,27 @@ namespace OneTimeSecret
 
                 if (answer != DialogResult.OK || form.Result == null) return;
 
+                if (config.WriteBackReceipt) WriteBackReceipt(mainWindow, entry, form.Result);
+
                 OnShareSucceeded(mainWindow, form.Result, form.PassphraseUsed, entry);
             }
+        }
+
+        /// <summary>
+        /// Best effort and silent on failure: a receipt write-back that cannot happen (the
+        /// database locked between dispatch and here) must not turn a successful share into
+        /// an error dialog. The user already has the link either way.
+        /// </summary>
+        private void WriteBackReceipt(MainForm mainWindow, PwEntry entry, ShareResult result)
+        {
+            PwDatabase database = m_host.Database;
+            if (database == null || !database.IsOpen) return;
+
+            PwEntry current = database.RootGroup.FindEntry(entry.Uuid, true);
+            if (current == null) return;
+
+            ReceiptWriter.Write(current, result.MetadataKey, DateTime.UtcNow);
+            mainWindow.UpdateUI(false, null, false, null, true, null, true);
         }
 
         private void OnShareSucceeded(MainForm mainWindow, ShareResult result, string passphrase, PwEntry entry)
@@ -204,6 +246,7 @@ namespace OneTimeSecret
                 config.DefaultTtlSeconds,
                 config.Template,
                 config.AllowInsecureHttp,
+                config.WriteBackReceipt,
                 config.PassphraseMode,
                 configured.Equals(PwUuid.Zero) ? string.Empty : configured.ToHexString(),
                 CredentialResolver.Describe(config, m_host.Database),
@@ -226,10 +269,148 @@ namespace OneTimeSecret
                 config.DefaultTtlSeconds = form.ResultTtlSeconds;
                 config.Template = form.ResultTemplate;
                 config.AllowInsecureHttp = form.ResultAllowInsecureHttp;
+                config.WriteBackReceipt = form.ResultWriteBackReceipt;
                 config.PassphraseMode = form.ResultPassphraseMode;
                 config.CredentialEntryUuid = ParseUuid(form.ResultCredentialUuidHex);
                 config.PassphraseEntryUuid = ParseUuid(form.ResultPassphraseEntryUuidHex);
             }
+        }
+
+        /// <summary>
+        /// Picks the client per the configured API version. "auto" probes once (cached per
+        /// host for 7 days - SPEC.md section 5) and, if it lands on v2, wraps the client so
+        /// a stale cache still recovers by retrying once as v1 (section 8's 404 row).
+        /// "v1"/"v2" are forced and never probe.
+        /// </summary>
+        private Func<CancellationToken, IOtsClient> BuildClientFactory(
+            PluginConfig config, Uri baseUri, OtsCredentials credentials, IWebProxy proxy, int timeoutMs)
+        {
+            var transport = new HttpTransport(proxy);
+
+            if (config.ApiVersion == PluginConfig.ApiVersionV1)
+                return delegate { return (IOtsClient)new OtsClientV1(baseUri, transport, credentials, timeoutMs); };
+
+            if (config.ApiVersion == PluginConfig.ApiVersionV2)
+                return delegate { return (IOtsClient)new OtsClientV2(baseUri, transport, credentials, timeoutMs); };
+
+            var cache = new ApiVersionCache(config);
+            return delegate(CancellationToken ct)
+            {
+                string version = OtsClientFactory.Detect(baseUri, transport, timeoutMs, cache, ct);
+
+                if (version == OtsClientFactory.VersionV1)
+                    return (IOtsClient)new OtsClientV1(baseUri, transport, credentials, timeoutMs);
+
+                IOtsClient v2 = new OtsClientV2(baseUri, transport, credentials, timeoutMs);
+                return new AutoFallbackOtsClient(
+                    v2,
+                    delegate { return (IOtsClient)new OtsClientV1(baseUri, transport, credentials, timeoutMs); },
+                    delegate { cache.SetCachedVersion(baseUri.Host, OtsClientFactory.VersionV1); });
+            };
+        }
+
+        private void OnBurnClick(object sender, EventArgs e)
+        {
+            MainForm mainWindow = (m_host != null) ? m_host.MainWindow : null;
+            if (mainWindow == null) return;
+
+            PwEntry entry = mainWindow.GetSelectedEntry(true);
+            if (entry == null) return;
+
+            string receiptKey = ReceiptWriter.TryReadReceiptKey(entry);
+            if (string.IsNullOrEmpty(receiptKey))
+            {
+                ShowError(mainWindow, "No OneTimeSecret receipt was found on this entry.");
+                return;
+            }
+
+            DialogResult confirm = MessageBox.Show(mainWindow,
+                "Burn the last OneTimeSecret share for this entry now?" + Environment.NewLine +
+                Environment.NewLine +
+                "Anyone still holding the link will no longer be able to open it. This cannot be undone.",
+                "OneTimeSecret", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            if (confirm != DialogResult.OK) return;
+
+            var config = new PluginConfig(m_host.CustomConfig);
+            Uri baseUri;
+            OtsCredentials credentials;
+            try
+            {
+                baseUri = UrlPolicy.Validate(config.BaseUrl, config.AllowInsecureHttp);
+
+                CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database);
+                // Same confirm-or-abort gate as sharing: degrading to an anonymous request
+                // for a destructive action deserves the same explicit confirmation sharing
+                // anonymously does, rather than silently trying and failing.
+                if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning))
+                    return;
+
+                credentials = resolution.Credentials;
+            }
+            catch (UrlPolicyException ex)
+            {
+                ShowError(mainWindow, ex.Message +
+                    Environment.NewLine + Environment.NewLine +
+                    "Fix it under Tools > OneTimeSecret > Options.");
+                return;
+            }
+
+            IWebProxy proxy = ProxyResolver.Resolve();
+            int timeoutMs = OtsClientV1.DefaultTimeoutMs;
+            Func<CancellationToken, IOtsClient> createClient =
+                BuildClientFactory(config, baseUri, credentials, proxy, timeoutMs);
+
+            PwUuid entryUuid = entry.Uuid;
+            mainWindow.SetStatusEx("Burning the last OneTimeSecret share...");
+
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                BurnResult result = null;
+                Exception failure = null;
+                try
+                {
+                    result = createClient(CancellationToken.None).Burn(receiptKey, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+
+                mainWindow.Invoke(new MethodInvoker(delegate
+                {
+                    mainWindow.SetStatusEx(null);
+
+                    if (failure != null)
+                    {
+                        string message = (failure is OtsException)
+                            ? failure.Message
+                            : "Unexpected error while burning (" + failure.GetType().Name + "): " + failure.Message;
+                        ShowError(mainWindow, message);
+                        return;
+                    }
+
+                    if (!result.Burned)
+                    {
+                        ShowError(mainWindow, result.Detail ??
+                            "OneTimeSecret did not confirm the secret was burned.");
+                        return;
+                    }
+
+                    PwDatabase database = m_host.Database;
+                    if (database != null && database.IsOpen)
+                    {
+                        PwEntry current = database.RootGroup.FindEntry(entryUuid, true);
+                        if (current != null)
+                        {
+                            ReceiptWriter.Remove(current);
+                            mainWindow.UpdateUI(false, null, false, null, true, null, true);
+                        }
+                    }
+
+                    MessageBox.Show(mainWindow, "The share has been burned. The link no longer works.",
+                        "OneTimeSecret", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }));
+            });
         }
 
         private CredentialSelection PickCredentialEntry(MainForm mainWindow, IWin32Window owner)

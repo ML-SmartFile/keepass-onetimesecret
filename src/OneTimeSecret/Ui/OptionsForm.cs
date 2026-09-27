@@ -36,6 +36,7 @@ namespace OneTimeSecret.Ui
         private readonly TextBox m_customTtl;
         private readonly TextBox m_template;
         private readonly CheckBox m_allowInsecureHttp;
+        private readonly CheckBox m_writeBackReceipt;
         private readonly ComboBox m_passphraseMode;
         private readonly TextBox m_credentialDisplay;
         private readonly Label m_passphraseEntryLabel, m_passphraseEntryHint;
@@ -62,6 +63,7 @@ namespace OneTimeSecret.Ui
             int defaultTtlSeconds,
             string template,
             bool allowInsecureHttp,
+            bool writeBackReceipt,
             PassphraseMode passphraseMode,
             string credentialUuidHex,
             string credentialDisplay,
@@ -124,12 +126,14 @@ namespace OneTimeSecret.Ui
             // here would silently give you v1.
             m_apiVersion.Items.Add("auto");
             m_apiVersion.Items.Add("v1");
-            m_apiVersion.SelectedItem = (apiVersion == "v1") ? "v1" : "auto";
+            m_apiVersion.Items.Add("v2");
+            m_apiVersion.SelectedItem = (apiVersion == "v1" || apiVersion == "v2") ? apiVersion : "auto";
             Controls.Add(m_apiVersion);
             Controls.Add(new Label
             {
-                Text = "(v2 arrives in a later version)",
+                Text = "(auto detects and caches per host for 7 days)",
                 ForeColor = SystemColors.GrayText,
+                AutoSize = false,
                 Bounds = new Rectangle(320, y, 264, 20)
             });
             y += 36;
@@ -160,6 +164,7 @@ namespace OneTimeSecret.Ui
                 Text = "The API token is never written to KeePass.config.xml - only a reference to " +
                        "the entry is stored, and the token is read at the moment of sharing.",
                 ForeColor = SystemColors.GrayText,
+                AutoSize = false,
                 Bounds = new Rectangle(160, y, 424, 32)
             });
             y += 42;
@@ -202,9 +207,19 @@ namespace OneTimeSecret.Ui
             {
                 Text = "Placeholders: {TITLE} {USERNAME} {PASSWORD} {URL} {NOTES}",
                 ForeColor = SystemColors.GrayText,
+                AutoSize = false,
                 Bounds = new Rectangle(160, y, 424, 20)
             });
             y += 26;
+
+            m_writeBackReceipt = new CheckBox
+            {
+                Text = "Write the receipt to a protected field on the entry (enables \"Burn last share\")",
+                Checked = writeBackReceipt,
+                Bounds = new Rectangle(160, y, 424, 22)
+            };
+            Controls.Add(m_writeBackReceipt);
+            y += 30;
 
             m_passphraseMode = new ComboBox
             {
@@ -249,7 +264,11 @@ namespace OneTimeSecret.Ui
                        "across shares is weaker than generating one: anyone who received an earlier " +
                        "share can open later ones.",
                 ForeColor = SystemColors.GrayText,
-                Bounds = new Rectangle(160, y, 424, 44)
+                AutoSize = false,
+                // Labels default to AutoSize=true, which ignores this Height and just grows
+                // wide instead of wrapping unless turned off explicitly - see ShareForm's
+                // passphrase warning label for the bug this caused there.
+                Bounds = new Rectangle(160, y, 424, 48)
             };
             Controls.Add(m_passphraseEntryHint);
 
@@ -257,7 +276,7 @@ namespace OneTimeSecret.Ui
             // out from the running y rather than fixed coordinates - hardcoding them is what
             // let the content run underneath the buttons when this block was added.
             m_contentBottomWithoutEntry = m_passphraseEntryTop;
-            m_contentBottomWithEntry = y + 44;
+            m_contentBottomWithEntry = y + 48;
 
             m_ok = new Button { Text = "OK", Bounds = new Rectangle(418, 0, 80, 26) };
             m_ok.Click += OnOk;
@@ -292,6 +311,7 @@ namespace OneTimeSecret.Ui
         public int ResultTtlSeconds { get; private set; }
         public string ResultTemplate { get; private set; }
         public bool ResultAllowInsecureHttp { get; private set; }
+        public bool ResultWriteBackReceipt { get; private set; }
         public PassphraseMode ResultPassphraseMode { get; private set; }
         public string ResultCredentialUuidHex { get; private set; }
         public string ResultPassphraseEntryUuidHex { get; private set; }
@@ -341,13 +361,14 @@ namespace OneTimeSecret.Ui
             {
                 Text = text,
                 Font = new Font(SystemFonts.DialogFont, FontStyle.Bold),
+                AutoSize = false,
                 Bounds = new Rectangle(14, top, 570, 20)
             };
         }
 
         private static Label Label(string text, int top)
         {
-            return new Label { Text = text, Bounds = new Rectangle(14, top, 140, 20) };
+            return new Label { Text = text, AutoSize = false, Bounds = new Rectangle(14, top, 140, 20) };
         }
 
         private void OnRegionChanged(object sender, EventArgs e)
@@ -449,6 +470,7 @@ namespace OneTimeSecret.Ui
             ResultTtlSeconds = ttlSeconds;
             ResultTemplate = m_template.Text;
             ResultAllowInsecureHttp = m_allowInsecureHttp.Checked;
+            ResultWriteBackReceipt = m_writeBackReceipt.Checked;
             var selectedMode = m_passphraseMode.SelectedItem as ModeItem;
             ResultPassphraseMode = (selectedMode != null) ? selectedMode.Mode : PassphraseMode.Generate;
 

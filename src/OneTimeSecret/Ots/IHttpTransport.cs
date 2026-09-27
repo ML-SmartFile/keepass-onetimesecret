@@ -20,6 +20,13 @@ namespace OneTimeSecret.Ots
         /// </summary>
         HttpResult Post(Uri uri, string contentType, byte[] body, string authorizationHeader,
             int timeoutMs, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Issues a GET. Used for capability detection, where there is no body to send.
+        /// Same cancellation and error-surfacing contract as <see cref="Post"/>.
+        /// </summary>
+        HttpResult Get(Uri uri, string authorizationHeader, int timeoutMs,
+            CancellationToken cancellationToken);
     }
 
     public sealed class HttpResult

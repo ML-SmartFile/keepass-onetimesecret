@@ -57,6 +57,7 @@ namespace OneTimeSecret.Ui
             {
                 Text = "The entry's user name must be your OneTimeSecret account e-mail, " +
                        "and its password the API token.",
+                AutoSize = false,
                 Bounds = new Rectangle(12, 10, 596, 32),
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
@@ -65,6 +66,7 @@ namespace OneTimeSecret.Ui
             var filterLabel = new Label
             {
                 Text = "Filter:",
+                AutoSize = false,
                 Bounds = new Rectangle(12, 50, 45, 20),
                 Anchor = AnchorStyles.Top | AnchorStyles.Left
             };

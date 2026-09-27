@@ -44,6 +44,13 @@ namespace OneTimeSecret.Tests
                 if (m_failure != null) throw m_failure;
                 return m_result;
             }
+
+            public HttpResult Get(Uri uri, string authorizationHeader, int timeoutMs,
+                CancellationToken cancellationToken)
+            {
+                // v1 never issues a GET; unused by any of these tests.
+                throw new NotSupportedException();
+            }
         }
 
         private static StubTransport Success()
@@ -524,6 +531,64 @@ namespace OneTimeSecret.Tests
             }
 
             Assert.True(transport.LastBodyBuffer.All(b => b == 0));
+        }
+
+        [Fact]
+        public void Burn_PostsFormEncodedToTheExpectedEndpointWithTheRequiredContinueField()
+        {
+            // Verified against api.onetimesecret.com's published docs: v1 has its own
+            // (deprecated but present) burn endpoint, form-encoded like the rest of v1, and
+            // "continue" is a required field there too - not just on v2's variants.
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"burned\"}"));
+            Client(transport).Burn("METAKEY", CancellationToken.None);
+
+            Assert.Equal("https://eu.onetimesecret.com/api/v1/private/METAKEY/burn",
+                transport.LastUri.AbsoluteUri);
+            Assert.Equal("application/x-www-form-urlencoded", transport.LastContentType);
+            Assert.Equal("continue=true", transport.LastBodyText);
+        }
+
+        [Fact]
+        public void Burn_ReturnsBurnedTrueWhenStateTransitionsToBurned()
+        {
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"burned\"}"));
+            BurnResult result = Client(transport).Burn("METAKEY", CancellationToken.None);
+
+            Assert.True(result.Burned);
+        }
+
+        [Fact]
+        public void Burn_ReturnsBurnedFalseWithDetailWhenStateDidNotChange()
+        {
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"new\"}"));
+            BurnResult result = Client(transport).Burn("METAKEY", CancellationToken.None);
+
+            Assert.False(result.Burned);
+            Assert.Contains("new", result.Detail);
+        }
+
+        [Fact]
+        public void Burn_MapsHttpErrorsLikeShare()
+        {
+            var transport = new StubTransport(new HttpResult(401, ""));
+            var ex = Assert.Throws<OtsException>(() =>
+                Client(transport).Burn("METAKEY", CancellationToken.None));
+
+            Assert.Equal(401, ex.StatusCode);
+        }
+
+        [Fact]
+        public void Burn_ThrowsOnAnUnreadableBody()
+        {
+            var transport = new StubTransport(new HttpResult(200, "<html>not json</html>"));
+            Assert.Throws<OtsException>(() => Client(transport).Burn("METAKEY", CancellationToken.None));
+        }
+
+        [Fact]
+        public void Burn_RejectsAnEmptyReceiptKey()
+        {
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"burned\"}"));
+            Assert.Throws<ArgumentException>(() => Client(transport).Burn("", CancellationToken.None));
         }
     }
 }

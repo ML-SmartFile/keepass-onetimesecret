@@ -338,3 +338,69 @@ read from `AceIntegration` but have not been exercised against a real configured
 - "Cancel" becomes "Close" once a request is dispatched — cancellation only stops us
   waiting, since the server may already have stored the secret, and the label says so
   rather than implying an undo that cannot happen.
+
+<!-- M4: -->
+**M4 — 2026-09-27.** `OtsClientV2`, capability detection with per-host caching, burn, and
+receipt write-back. All acceptance criteria smoke-tested by the user against the hosted
+service with a real account, except the self-hosted-v1-only fallback path, which has no
+instance to test against and is verified by logic and unit test only. This milestone's
+own spec (the v2 shape, guessed from the OpenAPI doc) turned out wrong in more places than
+any prior milestone, and burn did not actually work at all until the third fix — recorded
+in full here because the pattern (docs vs. reality) is worth carrying into M5.
+
+- **The v2 conceal response bears no resemblance to the OpenAPI-derived guess.** Real
+  shape verified with live calls: wrapped in `success`/`record`/`details`, `record.secret`
+  and `record.receipt` carry dozens of undocumented fields, and — the load-bearing
+  difference — **it hands back no `share_url`/`receipt_url` at all**, unlike v1. Both
+  links are now constructed client-side from bare keys, confirmed correct by actually
+  opening the constructed share URL. See `SPEC.md` §5.
+- **Burning did not work at all, for anyone, until the API's published docs — not the
+  OpenAPI guess — were checked directly.** All three burn endpoint variants
+  (`v1/private`, `v2/private`, `v2/receipt`) require a `continue` body field, undocumented
+  beyond its presence in the schema. This client sent `{}` and got HTTP 200 with
+  `"success":false` unconditionally — first read as "anonymous shares can't be burned"
+  (plausible: the created record's `custid`/`owner_id` were null), but a real authenticated
+  account with a **confirmed populated `owner_id`** got the identical failure, which
+  disproved that theory and pointed at the missing field instead. Sending
+  `"continue":"true"` fixed it for both anonymous and authenticated shares, confirmed by
+  the user. **`api.onetimesecret.com`'s interactive docs, not the OpenAPI JSON export
+  alone, were what surfaced the actual endpoint paths and the `continue` requirement** —
+  worth checking first next time a v2 assumption needs verifying.
+- **v1 has a burn endpoint too** (deprecated but present, `POST /api/v1/private/{key}/burn`,
+  form-encoded). An earlier version of this milestone assumed burn was v2-only and had
+  `OtsClientV1.Burn` throw; that assumption was never verified and was wrong. Implemented
+  properly once found.
+- **A 401/403 on v2 does not always mean bad credentials.** A real account requesting a
+  longer-than-default lifetime got 401 with `"...entitlement"` in the message — a plan
+  limitation, not rejected credentials. The blanket "check your credentials" wording
+  actively misled the user during testing. Both clients now recognize `"entitlement"` in
+  the server message and give a distinct, accurate message instead.
+- **Every `Label` in this codebase defaults to `AutoSize = true` and none of them had it
+  turned off.** WinForms silently ignores the `Height` in a `Bounds` assignment on an
+  auto-sizing `Label` and grows it to fit the text on one line instead of wrapping —
+  meaning every multi-line hint/warning label's carefully computed `Bounds` was never
+  actually being honoured, and text that didn't fit was simply cut off by whatever was
+  drawn after it. Two real instances found by smoke test (`ShareForm`'s passphrase warning,
+  `ResultForm`'s section header); a first fix attempt (raising `Height` alone) did nothing,
+  because `AutoSize` was still `true`. Fixed at the root: all 19 `Label` instances across
+  all four forms now set `AutoSize = false` explicitly. **Any future label with wrapped or
+  variable-length text needs this set, or the bug recurs.**
+- **The entry-context menu only gives a plugin one `GetMenuItem` slot per `PluginMenuType`
+  — there is no way to add a second flat item without manipulating `entryMenu.Items`
+  directly**, which `SPEC.md` §4 already ruled out as unsafe (KeePass owns and rebuilds
+  that shared collection). "Burn Last Share" first went under the Tools menu to sidestep
+  this; the user found that placement confusing during testing ("hidden under tools") and
+  asked to move it. After confirming the Items-manipulation route really would need to
+  break the documented rule, the fix was a submenu — one entry-context item ("OneTimeSecret")
+  with "Share…" and "Burn Last Share…" nested as `DropDownItems` — which keeps both
+  commands on the entry's own right-click menu without touching KeePass's menu collection.
+  Costs one extra click on Share versus the milestone's original flat item; accepted as the
+  right tradeoff once the alternative (Tools menu) was shown to be worse in practice.
+- Capability detection (`OtsClientFactory.Detect`) writes its result to `CustomConfig`
+  from a background thread during a share — the first time this codebase has written
+  config off the UI thread. Not believed to be a real problem (nothing else touches config
+  concurrently during a share) but flagged rather than silently introduced.
+- A live API token was accidentally pasted into a throwaway diagnostic script during this
+  milestone's burn investigation. Deleted immediately (it was never staged or committed),
+  and the user was told to rotate it. Recorded here as a reason to keep the "credentials
+  never leave the user's own database" rule absolute even for one-off debugging.

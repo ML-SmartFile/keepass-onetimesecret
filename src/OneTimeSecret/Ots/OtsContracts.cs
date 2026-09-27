@@ -70,6 +70,24 @@ namespace OneTimeSecret.Ots
         }
     }
 
+    /// <summary>
+    /// Outcome of a burn attempt. <see cref="Burned"/> false is a normal, non-exceptional
+    /// result the API itself reports (v2: HTTP 200 with "success":false; v1: HTTP 200 with
+    /// a "state" that isn't "burned") rather than an HTTP error. <see cref="Detail"/>
+    /// explains why when that is known.
+    /// </summary>
+    public sealed class BurnResult
+    {
+        public BurnResult(bool burned, string detail)
+        {
+            Burned = burned;
+            Detail = detail;
+        }
+
+        public bool Burned { get; private set; }
+        public string Detail { get; private set; }
+    }
+
     public interface IOtsClient
     {
         ShareResult Share(ShareRequest request);
@@ -79,6 +97,12 @@ namespace OneTimeSecret.Ots
         /// server may already have stored, and callers must not imply that it did.
         /// </summary>
         ShareResult Share(ShareRequest request, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Burns a previously-shared secret by its receipt key. Both v1 and v2 support this
+        /// (v1's is deprecated but present) - see SPEC.md section 5.
+        /// </summary>
+        BurnResult Burn(string receiptKey, CancellationToken cancellationToken);
     }
 
     /// <summary>
