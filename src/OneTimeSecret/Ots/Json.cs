@@ -63,6 +63,16 @@ namespace OneTimeSecret.Ots
             return value as string;
         }
 
+        /// <summary>Reads an optional nested object. Returns null when absent or not an object.</summary>
+        public static Dictionary<string, object> GetObjectOrNull(Dictionary<string, object> obj, string key)
+        {
+            if (obj == null) return null;
+
+            object value;
+            if (!obj.TryGetValue(key, out value)) return null;
+            return value as Dictionary<string, object>;
+        }
+
         /// <summary>Reads an optional numeric field. Returns null when absent or not a number.</summary>
         public static int? GetIntOrNull(Dictionary<string, object> obj, string key)
         {

@@ -58,7 +58,7 @@ namespace OneTimeSecret.Ots
             }
             catch (HttpTransportException ex)
             {
-                throw Translate(ex);
+                throw OtsErrorTranslator.TranslateTransportFailure(ex);
             }
             finally
             {
@@ -130,45 +130,35 @@ namespace OneTimeSecret.Ots
                 effectiveTtl);
         }
 
-        private static OtsException Translate(HttpTransportException ex)
-        {
-            switch (ex.Kind)
-            {
-                case HttpFailureKind.Timeout:
-                    return new OtsException(
-                        "The request to OneTimeSecret timed out. Nothing was shared.", 0, null, ex);
-
-                case HttpFailureKind.NameResolution:
-                    return new OtsException(
-                        "Could not reach OneTimeSecret: the server name could not be resolved. " +
-                        "Check the base URL and your network connection.", 0, null, ex);
-
-                case HttpFailureKind.Tls:
-                    return new OtsException(
-                        "The secure connection to OneTimeSecret failed: the server's certificate " +
-                        "was not trusted. The secret was not sent.", 0, null, ex);
-
-                default:
-                    return new OtsException(
-                        "Could not reach OneTimeSecret. " + ex.Message, 0, null, ex);
-            }
-        }
-
         private static OtsException TranslateHttpError(HttpResult response, bool isAnonymous)
         {
             string serverMessage, errorField, requestId;
-            ReadErrorBody(response.Body, out serverMessage, out errorField, out requestId);
+            OtsErrorTranslator.ReadErrorBody(response.Body, out serverMessage, out errorField, out requestId);
 
             string message;
             switch (response.StatusCode)
             {
                 case 401:
                 case 403:
-                    message = isAnonymous
-                        ? "OneTimeSecret refused an anonymous share. Configure an account and " +
-                          "API token in the OneTimeSecret options."
-                        : "OneTimeSecret rejected your credentials. Check the account and API " +
-                          "token in the OneTimeSecret options.";
+                    // Verified on v2 with a real account: a too-long lifetime came back 401
+                    // with "...entitlement" in the message rather than a 400/422 ttl error.
+                    // The same account/API almost certainly does this on v1 too, so the same
+                    // distinction applies here rather than blaming credentials outright.
+                    if (!string.IsNullOrEmpty(serverMessage) &&
+                        serverMessage.IndexOf("entitlement", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        message = "OneTimeSecret rejected this request because of an account plan " +
+                            "limitation, not bad credentials - most likely the requested lifetime " +
+                            "exceeds what your plan allows. Try a shorter lifetime.";
+                    }
+                    else
+                    {
+                        message = isAnonymous
+                            ? "OneTimeSecret refused an anonymous share. Configure an account and " +
+                              "API token in the OneTimeSecret options."
+                            : "OneTimeSecret rejected your credentials. Check the account and API " +
+                              "token in the OneTimeSecret options.";
+                    }
                     break;
 
                 case 404:
@@ -219,28 +209,57 @@ namespace OneTimeSecret.Ots
         }
 
         /// <summary>
-        /// Best effort: an error body may be JSON, HTML, or empty. Never throws - a failure
-        /// to parse the error must not replace the real error with a parser error.
+        /// Verified against api.onetimesecret.com's published docs: v1 does have a burn
+        /// endpoint (deprecated, but present) - POST /api/v1/private/{key}/burn, form
+        /// encoded like the rest of v1, requiring the same undocumented "continue" field
+        /// as v2's three burn variants. An earlier version of this client assumed burning
+        /// was v2-only; that assumption was never verified and was wrong.
         /// </summary>
-        private static void ReadErrorBody(string body, out string message, out string field, out string requestId)
+        public BurnResult Burn(string receiptKey, CancellationToken cancellationToken)
         {
-            message = null;
-            field = null;
-            requestId = null;
+            if (string.IsNullOrEmpty(receiptKey)) throw new ArgumentException("receiptKey is required.", "receiptKey");
 
-            if (string.IsNullOrEmpty(body)) return;
+            var endpoint = new Uri(m_baseUri.AbsoluteUri.TrimEnd('/') +
+                "/api/v1/private/" + Uri.EscapeDataString(receiptKey) + "/burn");
 
+            HttpResult response;
             try
             {
-                var obj = Json.ParseObject(body);
-                message = Json.GetStringOrNull(obj, "message") ?? Json.GetStringOrNull(obj, "error");
-                field = Json.GetStringOrNull(obj, "field");
-                requestId = Json.GetStringOrNull(obj, "request_id");
+                response = m_transport.Post(
+                    endpoint, "application/x-www-form-urlencoded", Encoding.UTF8.GetBytes("continue=true"),
+                    BasicAuth.Header(m_credentials), m_timeoutMs, cancellationToken);
             }
-            catch (JsonException)
+            catch (HttpTransportException ex)
             {
-                // Not JSON. Leave everything null rather than echoing an HTML error page.
+                throw OtsErrorTranslator.TranslateTransportFailure(ex);
             }
+
+            if (!response.IsSuccess) throw TranslateHttpError(response, m_credentials.IsAnonymous);
+
+            Dictionary<string, object> obj;
+            try
+            {
+                obj = Json.ParseObject(response.Body);
+            }
+            catch (JsonException ex)
+            {
+                throw new OtsException(
+                    "The server returned a response this plugin could not read. " + ex.Message, 200, null, ex);
+            }
+
+            // v1's burn response is a flat object like its share response (see
+            // Share_ReadsARealWorldV1Payload), carrying the record's current "state" rather
+            // than a v2-style "success" flag - per the docs, a successful burn transitions
+            // state to "burned".
+            string state = Json.GetStringOrNull(obj, "state");
+            bool burned = string.Equals(state, "burned", StringComparison.OrdinalIgnoreCase);
+
+            string detail = burned
+                ? null
+                : "OneTimeSecret did not confirm the secret was burned" +
+                  (string.IsNullOrEmpty(state) ? "." : " (reported state: " + state + ").");
+
+            return new BurnResult(burned, detail);
         }
     }
 }

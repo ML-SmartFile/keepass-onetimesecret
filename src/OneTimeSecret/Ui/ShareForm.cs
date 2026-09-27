@@ -20,7 +20,7 @@ namespace OneTimeSecret.Ui
 
         private readonly IDictionary<string, string> m_resolvedFields;
         private readonly Func<string> m_generatePassphrase;
-        private readonly Func<IOtsClient> m_createClient;
+        private readonly Func<CancellationToken, IOtsClient> m_createClient;
         private readonly string m_targetHost;
 
         private readonly CheckBox m_title, m_userName, m_password, m_url, m_notes, m_includeMessage;
@@ -48,7 +48,7 @@ namespace OneTimeSecret.Ui
             string storedPassphraseWarning,
             string targetHost,
             Func<string> generatePassphrase,
-            Func<IOtsClient> createClient)
+            Func<CancellationToken, IOtsClient> createClient)
         {
             if (resolvedFields == null) throw new ArgumentNullException("resolvedFields");
             if (generatePassphrase == null) throw new ArgumentNullException("generatePassphrase");
@@ -67,7 +67,7 @@ namespace OneTimeSecret.Ui
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(620, 610);
+            ClientSize = new Size(620, 640);
 
             int y = 12;
 
@@ -184,9 +184,15 @@ namespace OneTimeSecret.Ui
                     ? "reused across shares - weaker than generating one"
                     : (storedPassphraseWarning ?? "no entry configured in Options"),
                 ForeColor = SystemColors.GrayText,
-                Bounds = new Rectangle(250, y, 354, 20)
+                AutoSize = false,
+                // Tall enough for the longest of these - PassphraseResolver's "no entry
+                // configured" warning wraps to three lines at this width. Labels default to
+                // AutoSize=true, which silently ignores this Height (and just grows wide
+                // instead of wrapping) unless turned off explicitly, which is why the first
+                // attempt at this fix did nothing - found by a second round of smoke test.
+                Bounds = new Rectangle(250, y, 354, 50)
             });
-            y += 26;
+            y += 56;
 
             Controls.Add(Hint("A passphrase is never part of the link - send it separately.", y, 494));
             y += 30;
@@ -198,6 +204,7 @@ namespace OneTimeSecret.Ui
             {
                 Text = "optional - OneTimeSecret e-mails the link",
                 ForeColor = SystemColors.GrayText,
+                AutoSize = false,
                 Bounds = new Rectangle(372, y, 232, 20)
             });
             y += 32;
@@ -206,6 +213,7 @@ namespace OneTimeSecret.Ui
             {
                 Text = "Will be sent to " + m_targetHost,
                 Font = new Font(SystemFonts.DialogFont, FontStyle.Bold),
+                AutoSize = false,
                 Bounds = new Rectangle(14, y, 590, 20)
             });
             y += 26;
@@ -214,15 +222,16 @@ namespace OneTimeSecret.Ui
             {
                 Text = string.Empty,
                 ForeColor = SystemColors.GrayText,
+                AutoSize = false,
                 Bounds = new Rectangle(14, y, 590, 34)
             };
             Controls.Add(m_progress);
 
-            m_share = new Button { Text = "Share", Bounds = new Rectangle(438, 572, 80, 26) };
+            m_share = new Button { Text = "Share", Bounds = new Rectangle(438, 602, 80, 26) };
             m_share.Click += OnShare;
             Controls.Add(m_share);
 
-            m_close = new Button { Text = "Cancel", Bounds = new Rectangle(524, 572, 80, 26) };
+            m_close = new Button { Text = "Cancel", Bounds = new Rectangle(524, 602, 80, 26) };
             m_close.Click += OnCloseClick;
             Controls.Add(m_close);
 
@@ -425,7 +434,7 @@ namespace OneTimeSecret.Ui
             {
                 try
                 {
-                    ShareResult result = m_createClient().Share(request, token);
+                    ShareResult result = m_createClient(token).Share(request, token);
                     Post(delegate
                     {
                         Result = result;
@@ -550,13 +559,14 @@ namespace OneTimeSecret.Ui
             {
                 Text = text,
                 Font = new Font(SystemFonts.DialogFont, FontStyle.Bold),
+                AutoSize = false,
                 Bounds = new Rectangle(14, top, 590, 20)
             };
         }
 
         private static Label Caption(string text, int top)
         {
-            return new Label { Text = text, Bounds = new Rectangle(14, top, 92, 20) };
+            return new Label { Text = text, AutoSize = false, Bounds = new Rectangle(14, top, 92, 20) };
         }
 
         private static Label Hint(string text, int top, int width)
@@ -565,6 +575,7 @@ namespace OneTimeSecret.Ui
             {
                 Text = text,
                 ForeColor = SystemColors.GrayText,
+                AutoSize = false,
                 Bounds = new Rectangle(110, top, width, 28)
             };
         }

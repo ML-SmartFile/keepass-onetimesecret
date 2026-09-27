@@ -90,6 +90,54 @@ namespace OneTimeSecret.Ots
             }
         }
 
+        public HttpResult Get(Uri uri, string authorizationHeader, int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            if (uri == null) throw new ArgumentNullException("uri");
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var request = (HttpWebRequest)WebRequest.Create(uri);
+            request.Method = "GET";
+            request.Timeout = timeoutMs;
+            request.ReadWriteTimeout = timeoutMs;
+            request.UserAgent = "KeePassOneTimeSecret";
+            request.Accept = "application/json";
+            request.AllowAutoRedirect = false;
+
+            if (m_proxy != null) request.Proxy = m_proxy;
+
+            if (!string.IsNullOrEmpty(authorizationHeader))
+                request.Headers[HttpRequestHeader.Authorization] = authorizationHeader;
+
+            using (cancellationToken.Register(delegate { try { request.Abort(); } catch { } }))
+            {
+                try
+                {
+                    using (var response = (HttpWebResponse)request.GetResponse())
+                    {
+                        return new HttpResult((int)response.StatusCode, ReadBody(response));
+                    }
+                }
+                catch (WebException ex)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        throw new OperationCanceledException(cancellationToken);
+
+                    var errorResponse = ex.Response as HttpWebResponse;
+                    if (errorResponse != null)
+                    {
+                        using (errorResponse)
+                        {
+                            return new HttpResult((int)errorResponse.StatusCode, ReadBody(errorResponse));
+                        }
+                    }
+
+                    throw Translate(ex);
+                }
+            }
+        }
+
         private static string ReadBody(HttpWebResponse response)
         {
             using (Stream stream = response.GetResponseStream())

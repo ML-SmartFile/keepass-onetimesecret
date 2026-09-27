@@ -140,16 +140,28 @@ review rule is sufficient.
 
 Do not manipulate `MainWindow.EntryContextMenu.Items` directly. Use the supported hook
 (available since KeePass 2.42), which places the item in the plugin block at the bottom
-of the entry context menu and mirrors it into the main Entry menu automatically:
+of the entry context menu and mirrors it into the main Entry menu automatically.
+`GetMenuItem` hands back exactly **one** `ToolStripMenuItem` per `PluginMenuType` — there
+is no second call for a second command. A plugin offering more than one entry-scoped
+command nests them as `DropDownItems` of the one item it returns, rather than adding
+further items to `entryMenu.Items` directly:
 
 ```csharp
 public override ToolStripMenuItem GetMenuItem(PluginMenuType t)
 {
     if (t == PluginMenuType.Entry)
     {
-        var tsmi = new ToolStripMenuItem("Share with OneTimeSecret…");
-        tsmi.Click += OnShareClick;
-        return tsmi;
+        var root = new ToolStripMenuItem("OneTimeSecret");
+
+        var share = new ToolStripMenuItem("Share…");
+        share.Click += OnShareClick;
+        root.DropDownItems.Add(share);
+
+        var burn = new ToolStripMenuItem("Burn Last Share…");
+        burn.Click += OnBurnClick;
+        root.DropDownItems.Add(burn);
+
+        return root;
     }
     if (t == PluginMenuType.Main)
     {
@@ -160,6 +172,16 @@ public override ToolStripMenuItem GetMenuItem(PluginMenuType t)
     return null;
 }
 ```
+
+> **M4 tried putting "Burn Last Share" under the Tools menu first** (a second `DropDownItems`
+> entry next to Options), reasoning that it left the already-shipped one-click
+> "Share with OneTimeSecret…" entry item untouched. The user found it while testing:
+> "very confusing when it's hidden under tools" — a second, unrelated command tucked away
+> in Tools was not discoverable from the entry it acts on. Moving both commands into one
+> submenu on the entry context menu itself fixed that at the cost of one extra click on
+> Share. A version of this that added a second flat item directly to `entryMenu.Items` was
+> also tried and reverted — it would have worked, but breaks the rule above for no real
+> gain over the submenu, and the user asked not to go around it once the tradeoff was clear.
 
 Hook the owning menu's `Opening` event to enable the item only when
 `host.MainWindow.GetSelectedEntriesCount() == 1`. Multi-select is out of scope for v1 —
@@ -264,7 +286,7 @@ Response (200, JSON) includes `secret_key` and `metadata_key`.
 ```
 POST {base}/api/v2/secret/conceal
 Content-Type: application/json
-Authorization: Basic <base64(user:token)>
+Authorization: Basic <base64(user:token)>        (omit for anonymous)
 
 {
   "secret": {
@@ -272,36 +294,100 @@ Authorization: Basic <base64(user:token)>
     "secret": "<value>",
     "passphrase": "<optional>",
     "ttl": "86400",
-    "recipient": "<optional>",
-    "share_domain": "<optional>"
+    "recipient": "<optional>"
   }
 }
 ```
 
-Response (200) shape, abbreviated:
+> **Verified against `eu.onetimesecret.com`, September 2026 — the shape below replaces
+> the earlier guess derived from the published OpenAPI spec, which was wrong in several
+> load-bearing ways.** Anonymous requests are accepted (same as v1); the TTL cap is
+> enforced by the same silent clamp to 604800 seconds seen on v1, not a rejection.
+>
+> Real response to a conceal call:
+>
+> ```json
+> {
+>   "success": true,
+>   "record": {
+>     "receipt":  { "key": "…", "identifier": "…", "secret_ttl": 300, "share_domain": null, "…lots more…": "…" },
+>     "metadata": { "…same shape as receipt…": "…" },
+>     "secret":   { "key": "…", "identifier": "…", "secret_ttl": 300, "has_passphrase": false },
+>     "share_domain": null
+>   },
+>   "details": { "kind": "conceal", "recipient": [], "recipient_safe": [] }
+> }
+> ```
+>
+> Differences from the guessed shape, all confirmed by a live call:
+> - The payload is wrapped in a top-level `success` flag and a `details` object neither
+>   of which the earlier draft anticipated. The JSON reader ignores both — only `record`
+>   matters for a share.
+> - `record.receipt` and `record.secret` carry the two required `key`/`identifier` fields
+>   the earlier draft expected, plus dozens more (`secret_ttl`, `metadata_ttl`,
+>   `receipt_ttl`, `lifespan`, timestamps, `is_*` flags, …) that the reader correctly
+>   ignores rather than failing on.
+> - **Critically, `record` carries no `receipt_url` / `share_url` / `metadata_url` at
+>   conceal time** — unlike v1, which hands those back ready-made. Both links have to be
+>   constructed client-side from `record.secret.key` and `record.receipt.key`, using the
+>   same `{host}/secret/{key}` and `{host}/receipt/{key}` pattern the v1 client already
+>   uses, substituting `record.share_domain` for the host when it is set. Confirmed by
+>   actually opening the constructed share link (`https://eu.onetimesecret.com/secret/{key}`
+>   returned the reveal page, HTTP 200) rather than assuming the pattern holds.
+> - The applied TTL lives at `record.secret.secret_ttl` (also duplicated onto `receipt`
+>   and `metadata`) — read the same way the v1 client reads `secret_ttl`/`ttl`.
+> - The server-provided full URL set (`share_url`, `receipt_url`, `burn_url`, plus the
+>   bare `*_path` forms) only appears in the **burn** endpoint's response, never in the
+>   conceal response. Not used by this client since it is only available after the fact,
+>   but worth knowing if a future response shape changes again.
+
+- Share link: `{https://share_domain or base}/secret/{record.secret.key}`
+- Receipt link: `{https://share_domain or base}/receipt/{record.receipt.key}`
+- Burn: `POST {base}/api/v2/private/{record.receipt.key}/burn`, JSON body `{"continue":"true"}`
+
+> **The published API docs at `api.onetimesecret.com` — not the OpenAPI-derived guess this
+> spec started from — turned up two corrections, found only after a real account's burn
+> attempts kept silently failing.**
+>
+> 1. **All three burn endpoint variants (`v1/private`, `v2/private`, `v2/receipt`) require
+>    a `continue` body field**, undocumented beyond its presence in the schema
+>    (`{"type": "string"}`, no description, no enum, no example — checked the raw OpenAPI
+>    JSON directly, not just the rendered docs). This client omitted it entirely and sent
+>    `{}`. Every burn attempt — anonymous, and later a real authenticated account with a
+>    confirmed non-null `owner_id` — came back HTTP 200 with `"success":false` until this
+>    was found. `"true"` is what this client now sends; the API gives no way to confirm
+>    that specific value is correct short of a working burn, which still needs the user's
+>    own account to verify end-to-end.
+> 2. **v1 has its own burn endpoint too** (`POST {base}/api/v1/private/{key}/burn`, form
+>    encoded like the rest of v1, deprecated but present). An earlier draft of this spec
+>    assumed burning was v2-only; that was never verified and was wrong. `OtsClientV1` now
+>    implements it.
+>
+> Earlier testing (before the `continue` field was found) captured this: three anonymous
+> burn attempts — a bare cross-session call, one replaying the creating session's cookie,
+> and one additionally carrying that session's `X-CSRF-Token` — all returned HTTP 200 with
+> `"success":false` and a `custid`/`owner_id` of `null` on the created record, which read
+> at the time as "only an owning account can burn its own secret." A follow-up test with a
+> **real authenticated account** (confirmed `owner_id` populated, so genuinely
+> account-owned) got the identical `"success":false` shape anyway — disproving the
+> ownership theory and pointing at the missing `continue` field instead. Treat
+> `success:false` (v2) or a `state` that isn't `"burned"` (v1) as a normal, non-exceptional
+> outcome the client reports back rather than throws on — the real cause of a decline
+> once `continue` is present is not yet known and is deliberately left unguessed.
+
+Error responses look like one of:
 
 ```json
-{
-  "record": {
-    "receipt": { "key": "…", "identifier": "…", "shortid": "…", "state": "new" },
-    "secret":  { "key": "…", "identifier": "…", "shortid": "…", "state": "new" },
-    "share_domain": null
-  }
-}
+{"error": "You did not provide anything to share", "error_type": "missing", "field": "secret", "request_id": "…"}
+{"error": "Authentication Required", "message": "[CREDENTIALS_INVALID] Invalid credentials", "timestamp": 1790506696}
 ```
 
-- Share link: `{share_domain or base}/secret/{record.secret.key}`
-- Burn: `POST {base}/api/v2/private/{record.receipt.key}/burn`
-
-Error responses carry `error`, `error_type`, `message`, `field` and `request_id`.
-Branch on `error_type`; show `error` to the user; include `request_id` in any detail
-view so the user can quote it in a bug report.
-
-> **Verify before trusting.** The v2 response shape above is derived from the published
-> OpenAPI spec, not from a live call. The exact construction of the user-facing share
-> URL — especially with a custom `share_domain` — must be confirmed against a real
-> instance during M4. Write the JSON reader to **ignore unknown fields** and to fail
-> loudly on missing expected ones.
+> **Verified, not assumed:** bad credentials return **401** on v2 (unlike v1's 404
+> quirk — see §8). `request_id` is present on field-validation errors but absent on the
+> auth error above; `message` is present on the auth error but absent on the
+> field-validation one. Read both fields, prefer `message` when present (it was the more
+> specific one in the one real case where both existed), and treat every field as
+> optional — this API does not hand back a stable, complete shape either.
 
 ### TTL options to expose
 
@@ -355,7 +441,7 @@ OTS account email, `Password` is the API token. The options dialog offers an ent
 
 ## 7. User flow
 
-1. User right-clicks an entry → **Share with OneTimeSecret…**
+1. User right-clicks an entry → **OneTimeSecret → Share…**
 2. **ShareForm** opens, pre-filled from config:
    - Field checkboxes — Title / UserName / Password / URL / Notes — each mapping to the
      matching `SprEngine` built-in placeholder (`{TITLE}`, `{USERNAME}`, `{PASSWORD}`,
@@ -382,8 +468,9 @@ OTS account email, `Password` is the API token. The options dialog offers an ent
    **separate** copy buttons, so the user naturally sends them over different channels.
    Also offers the receipt/burn link.
 5. Optionally (if `WriteBackReceipt`) the receipt key and a UTC timestamp are written to
-   a **protected** custom string field `OTS Receipt` on the entry, enabling a later
-   "Burn last share" action.
+   a **protected** custom string field `OTS Receipt` on the entry, enabling
+   **OneTimeSecret → Burn Last Share…** from that entry's own context menu, right below
+   Share. Only enabled when the field is present; burning removes it again on success.
 
 ---
 
