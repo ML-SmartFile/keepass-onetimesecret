@@ -63,6 +63,30 @@ namespace OneTimeSecret.Ots
             return value as string;
         }
 
+        /// <summary>Reads an optional numeric field. Returns null when absent or not a number.</summary>
+        public static int? GetIntOrNull(Dictionary<string, object> obj, string key)
+        {
+            if (obj == null) return null;
+
+            object value;
+            if (!obj.TryGetValue(key, out value) || value == null) return null;
+
+            if (value is double)
+            {
+                double d = (double)value;
+                if (d < int.MinValue || d > int.MaxValue) return null;
+                return (int)d;
+            }
+
+            // Some deployments return numbers as strings; accept that rather than losing the value.
+            var s = value as string;
+            int parsed;
+            if (s != null && int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed))
+                return parsed;
+
+            return null;
+        }
+
         private static object ParseValue(string s, ref int i)
         {
             SkipWhitespace(s, ref i);

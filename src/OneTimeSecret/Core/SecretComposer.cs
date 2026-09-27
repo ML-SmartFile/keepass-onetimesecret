@@ -17,6 +17,14 @@ namespace OneTimeSecret.Core
         public const string FieldUrl = "URL";
         public const string FieldNotes = "NOTES";
 
+        /// <summary>
+        /// The per-share custom message. It is a substituted value rather than literal
+        /// template text, which keeps the template readable (the template shows {MESSAGE},
+        /// not a copy of the message) and means braces the user types in a message are never
+        /// re-interpreted as placeholders.
+        /// </summary>
+        public const string FieldMessage = "MESSAGE";
+
         public static readonly string DefaultTemplate =
             "{" + FieldUserName + "}\r\n{" + FieldPassword + "}";
 
@@ -47,11 +55,22 @@ namespace OneTimeSecret.Core
                     continue;
                 }
 
-                int close = template.IndexOf('}', i + 1);
+                // A '{' only opens a placeholder if its '}' arrives before any further '{'.
+                // Otherwise the brace is literal text - without this, a stray '{' in a custom
+                // message swallows the next real placeholder and the share silently goes out
+                // containing "{PASSWORD}" instead of the password.
+                int close = -1;
+                for (int j = i + 1; j < template.Length; j++)
+                {
+                    if (template[j] == '{') break;
+                    if (template[j] == '}') { close = j; break; }
+                }
+
                 if (close < 0)
                 {
-                    sb.Append(template, i, template.Length - i);
-                    break;
+                    sb.Append(c);
+                    i++;
+                    continue;
                 }
 
                 string name = template.Substring(i + 1, close - i - 1);

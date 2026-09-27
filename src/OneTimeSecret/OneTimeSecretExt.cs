@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
+using System.Net;
 using System.Windows.Forms;
 using KeePass.Forms;
 using KeePass.Plugins;
@@ -78,17 +78,15 @@ namespace OneTimeSecret
 
             var config = new PluginConfig(m_host.CustomConfig);
 
-            string composedSecret;
+            Dictionary<string, string> fields;
             Uri baseUri;
-            int ttlSeconds;
             OtsCredentials credentials;
             try
             {
-                // Everything the request needs is read here, on the UI thread, before dispatch.
-                var fields = EntryFieldReader.ReadResolvedFields(entry, m_host.Database);
-                composedSecret = SecretComposer.Compose(config.Template, fields);
+                // Everything the request needs is read here, on the UI thread, before the
+                // dialog opens - the database can lock while it is open or mid-request.
+                fields = EntryFieldReader.ReadResolvedFields(entry, m_host.Database);
                 baseUri = UrlPolicy.Validate(config.BaseUrl, config.AllowInsecureHttp);
-                ttlSeconds = config.DefaultTtlSeconds;
 
                 CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database);
                 if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning))
@@ -104,40 +102,78 @@ namespace OneTimeSecret
                 return;
             }
 
-            if (string.IsNullOrEmpty(composedSecret.Trim()))
-            {
-                ShowError(mainWindow, "This entry has nothing to share with the current template.");
-                return;
-            }
+            IWebProxy proxy = ProxyResolver.Resolve();
+            int timeoutMs = OtsClientV1.DefaultTimeoutMs;
 
-            ThreadPool.QueueUserWorkItem(delegate
+            var templateFields = new TemplateFields
             {
+                Title = config.IncludeTitle,
+                UserName = config.IncludeUserName,
+                Password = config.IncludePassword,
+                Url = config.IncludeUrl,
+                Notes = config.IncludeNotes,
+
+                // Whether a message is included is a per-share decision, but where it sits
+                // comes from the default template, so a layout set in Options survives.
+                Message = false,
+                MessageAfterFields = TemplateBuilder.MessageFollowsFields(config.Template),
+            };
+
+            PassphraseResolution storedPassphrase = PassphraseResolver.Resolve(config, m_host.Database);
+
+            using (var form = new ShareForm(
+                fields,
+                templateFields,
+                string.Empty,   // the message is per-share and is never carried over
+                config.Template,
+                config.DefaultTtlSeconds,
+                config.PassphraseMode,
+                storedPassphrase.Passphrase,
+                storedPassphrase.Warning,
+                baseUri.Host,
+                delegate { return PassphraseGenerator.Generate(m_host); },
+                delegate { return (IOtsClient)new OtsClientV1(
+                    baseUri, new HttpTransport(proxy), credentials, timeoutMs); }))
+            {
+                GlobalWindowManager.AddWindow(form);
+                DialogResult answer;
                 try
                 {
-                    var client = new OtsClientV1(baseUri, new HttpTransport(), credentials);
-                    ShareResult result = client.Share(new ShareRequest(composedSecret, ttlSeconds));
-                    Marshal(mainWindow, delegate { OnShareSucceeded(mainWindow, result, entry); });
+                    answer = form.ShowDialog(mainWindow);
                 }
-                catch (OtsException ex)
+                finally
                 {
-                    // OtsException messages are built from status codes and server error text
-                    // only - the secret is never passed into an exception we construct.
-                    string message = ex.Message;
-                    Marshal(mainWindow, delegate { ShowError(mainWindow, message); });
+                    GlobalWindowManager.RemoveWindow(form);
                 }
-                catch (Exception ex)
-                {
-                    string message = "Unexpected error while sharing (" + ex.GetType().Name + "): " + ex.Message;
-                    Marshal(mainWindow, delegate { ShowError(mainWindow, message); });
-                }
-            });
+
+                // Field selection is a durable preference ("I always share user name and
+                // password"), so it is remembered.
+                //
+                // The message, the template and the passphrase mode are deliberately NOT
+                // written back. A message is written for one recipient; persisting it would
+                // silently attach it to the next share to someone else, and the generated
+                // template contains that message, so storing it polluted the default template
+                // configured in Options. The passphrase mode belongs to Options too, or a
+                // one-off "None" would quietly become the standing default.
+                config.IncludeTitle = form.ResultFields.Title;
+                config.IncludeUserName = form.ResultFields.UserName;
+                config.IncludePassword = form.ResultFields.Password;
+                config.IncludeUrl = form.ResultFields.Url;
+                config.IncludeNotes = form.ResultFields.Notes;
+                if (form.ResultTtlSeconds > 0) config.DefaultTtlSeconds = form.ResultTtlSeconds;
+
+                if (answer != DialogResult.OK || form.Result == null) return;
+
+                OnShareSucceeded(mainWindow, form.Result, form.PassphraseUsed, entry);
+            }
         }
 
-        private void OnShareSucceeded(MainForm mainWindow, ShareResult result, PwEntry entry)
+        private void OnShareSucceeded(MainForm mainWindow, ShareResult result, string passphrase, PwEntry entry)
         {
             CopyToClipboard(mainWindow, result.ShareUrl, entry);
 
-            using (var form = new ResultForm(result.ShareUrl, result.ReceiptUrl,
+            using (var form = new ResultForm(result.ShareUrl, result.ReceiptUrl, passphrase,
+                result.RequestedTtlSeconds, result.EffectiveTtlSeconds,
                 delegate(string text) { CopyToClipboard(mainWindow, text, entry); }))
             {
                 GlobalWindowManager.AddWindow(form);
@@ -159,6 +195,7 @@ namespace OneTimeSecret
 
             var config = new PluginConfig(m_host.CustomConfig);
             PwUuid configured = config.CredentialEntryUuid;
+            PwUuid passphraseEntry = config.PassphraseEntryUuid;
 
             // Qualified: KeePass.Forms has its own OptionsForm, so the bare name is ambiguous.
             using (var form = new Ui.OptionsForm(
@@ -167,9 +204,11 @@ namespace OneTimeSecret
                 config.DefaultTtlSeconds,
                 config.Template,
                 config.AllowInsecureHttp,
-                config.GeneratePassphrase,
+                config.PassphraseMode,
                 configured.Equals(PwUuid.Zero) ? string.Empty : configured.ToHexString(),
                 CredentialResolver.Describe(config, m_host.Database),
+                passphraseEntry.Equals(PwUuid.Zero) ? string.Empty : passphraseEntry.ToHexString(),
+                PassphraseResolver.Describe(config, m_host.Database),
                 delegate(IWin32Window owner) { return PickCredentialEntry(mainWindow, owner); }))
             {
                 GlobalWindowManager.AddWindow(form);
@@ -187,8 +226,9 @@ namespace OneTimeSecret
                 config.DefaultTtlSeconds = form.ResultTtlSeconds;
                 config.Template = form.ResultTemplate;
                 config.AllowInsecureHttp = form.ResultAllowInsecureHttp;
-                config.GeneratePassphrase = form.ResultGeneratePassphrase;
+                config.PassphraseMode = form.ResultPassphraseMode;
                 config.CredentialEntryUuid = ParseUuid(form.ResultCredentialUuidHex);
+                config.PassphraseEntryUuid = ParseUuid(form.ResultPassphraseEntryUuidHex);
             }
         }
 
@@ -294,19 +334,6 @@ namespace OneTimeSecret
         {
             MessageBox.Show(mainWindow, message, "OneTimeSecret",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-
-        /// <summary>Marshals back onto the KeePass UI thread, tolerating shutdown mid-request.</summary>
-        private static void Marshal(MainForm mainWindow, MethodInvoker action)
-        {
-            if (mainWindow == null || mainWindow.IsDisposed) return;
-
-            try
-            {
-                mainWindow.Invoke(action);
-            }
-            catch (ObjectDisposedException) { }
-            catch (InvalidOperationException) { }
         }
     }
 }

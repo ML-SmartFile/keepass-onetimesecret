@@ -36,10 +36,25 @@ namespace OneTimeSecret.Ui
         private readonly TextBox m_customTtl;
         private readonly TextBox m_template;
         private readonly CheckBox m_allowInsecureHttp;
-        private readonly CheckBox m_generatePassphrase;
+        private readonly ComboBox m_passphraseMode;
         private readonly TextBox m_credentialDisplay;
+        private readonly Label m_passphraseEntryLabel, m_passphraseEntryHint;
+        private readonly TextBox m_passphraseEntryDisplay;
+        private readonly Button m_passphraseEntrySelect, m_passphraseEntryClear;
+        private readonly Button m_ok, m_cancel;
+        private readonly int m_passphraseEntryTop;
+        private readonly int m_contentBottomWithEntry, m_contentBottomWithoutEntry;
 
         private string m_credentialUuidHex;
+        private string m_passphraseEntryUuidHex;
+
+        /// <summary>Wraps a mode so the combo shows a readable label.</summary>
+        private sealed class ModeItem
+        {
+            public ModeItem(PassphraseMode mode) { Mode = mode; }
+            public PassphraseMode Mode { get; private set; }
+            public override string ToString() { return PassphraseModes.Describe(Mode); }
+        }
 
         public OptionsForm(
             string baseUrl,
@@ -47,14 +62,17 @@ namespace OneTimeSecret.Ui
             int defaultTtlSeconds,
             string template,
             bool allowInsecureHttp,
-            bool generatePassphrase,
+            PassphraseMode passphraseMode,
             string credentialUuidHex,
             string credentialDisplay,
+            string passphraseEntryUuidHex,
+            string passphraseEntryDisplay,
             Func<IWin32Window, CredentialSelection> pickEntry)
         {
             if (pickEntry == null) throw new ArgumentNullException("pickEntry");
             m_pickEntry = pickEntry;
             m_credentialUuidHex = credentialUuidHex ?? string.Empty;
+            m_passphraseEntryUuidHex = passphraseEntryUuidHex ?? string.Empty;
 
             Text = "OneTimeSecret Options";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -63,6 +81,7 @@ namespace OneTimeSecret.Ui
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.Font;
+            // Height is set by LayOutTail once the content is known.
             ClientSize = new Size(600, 500);
 
             int y = 14;
@@ -187,28 +206,85 @@ namespace OneTimeSecret.Ui
             });
             y += 26;
 
-            m_generatePassphrase = new CheckBox
+            m_passphraseMode = new ComboBox
             {
-                Text = "Protect shares with a generated passphrase (takes effect in a later version)",
-                Checked = generatePassphrase,
-                Bounds = new Rectangle(160, y, 424, 22)
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Bounds = new Rectangle(160, y - 3, 200, 23)
             };
-            Controls.Add(m_generatePassphrase);
+            foreach (PassphraseMode mode in new[] { PassphraseMode.None, PassphraseMode.Generate,
+                PassphraseMode.Manual, PassphraseMode.Entry })
+                m_passphraseMode.Items.Add(new ModeItem(mode));
+            SelectPassphraseMode(passphraseMode);
+            m_passphraseMode.SelectedIndexChanged += delegate { UpdatePassphraseEntryVisibility(); };
+            Controls.Add(Label("Passphrase:", y));
+            Controls.Add(m_passphraseMode);
+            y += 30;
 
-            var ok = new Button { Text = "OK", Bounds = new Rectangle(418, 462, 80, 26) };
-            ok.Click += OnOk;
-            Controls.Add(ok);
+            // Only shown for the Entry mode - a picker for a setting you are not using is noise.
+            m_passphraseEntryTop = y;
+            m_passphraseEntryLabel = Label("From entry:", y);
+            Controls.Add(m_passphraseEntryLabel);
 
-            var cancel = new Button
+            m_passphraseEntryDisplay = new TextBox
+            {
+                Text = passphraseEntryDisplay ?? string.Empty,
+                ReadOnly = true,
+                BackColor = SystemColors.Control,
+                Bounds = new Rectangle(160, y - 3, 250, 23)
+            };
+            Controls.Add(m_passphraseEntryDisplay);
+
+            m_passphraseEntrySelect = new Button { Text = "Select...", Bounds = new Rectangle(418, y - 4, 80, 25) };
+            m_passphraseEntrySelect.Click += OnSelectPassphraseEntry;
+            Controls.Add(m_passphraseEntrySelect);
+
+            m_passphraseEntryClear = new Button { Text = "Clear", Bounds = new Rectangle(504, y - 4, 80, 25) };
+            m_passphraseEntryClear.Click += OnClearPassphraseEntry;
+            Controls.Add(m_passphraseEntryClear);
+            y += 28;
+
+            m_passphraseEntryHint = new Label
+            {
+                Text = "Read from that entry's Password field at share time. Reusing one passphrase " +
+                       "across shares is weaker than generating one: anyone who received an earlier " +
+                       "share can open later ones.",
+                ForeColor = SystemColors.GrayText,
+                Bounds = new Rectangle(160, y, 424, 44)
+            };
+            Controls.Add(m_passphraseEntryHint);
+
+            // The entry block is shown only for one passphrase mode, so the dialog is laid
+            // out from the running y rather than fixed coordinates - hardcoding them is what
+            // let the content run underneath the buttons when this block was added.
+            m_contentBottomWithoutEntry = m_passphraseEntryTop;
+            m_contentBottomWithEntry = y + 44;
+
+            m_ok = new Button { Text = "OK", Bounds = new Rectangle(418, 0, 80, 26) };
+            m_ok.Click += OnOk;
+            Controls.Add(m_ok);
+
+            m_cancel = new Button
             {
                 Text = "Cancel",
                 DialogResult = DialogResult.Cancel,
-                Bounds = new Rectangle(504, 462, 80, 26)
+                Bounds = new Rectangle(504, 0, 80, 26)
             };
-            Controls.Add(cancel);
-            CancelButton = cancel;
+            Controls.Add(m_cancel);
+            CancelButton = m_cancel;
 
+            UpdatePassphraseEntryVisibility();
             SyncRegionToBaseUrl();
+        }
+
+        /// <summary>Places the buttons below whatever content is currently shown, and sizes
+        /// the dialog to match. This form is not resizable, so it has to fit by construction.</summary>
+        private void LayOutTail(bool entryBlockVisible)
+        {
+            int bottom = entryBlockVisible ? m_contentBottomWithEntry : m_contentBottomWithoutEntry;
+
+            m_ok.Top = bottom + 12;
+            m_cancel.Top = bottom + 12;
+            ClientSize = new Size(600, bottom + 12 + m_ok.Height + 12);
         }
 
         public string ResultBaseUrl { get; private set; }
@@ -216,8 +292,48 @@ namespace OneTimeSecret.Ui
         public int ResultTtlSeconds { get; private set; }
         public string ResultTemplate { get; private set; }
         public bool ResultAllowInsecureHttp { get; private set; }
-        public bool ResultGeneratePassphrase { get; private set; }
+        public PassphraseMode ResultPassphraseMode { get; private set; }
         public string ResultCredentialUuidHex { get; private set; }
+        public string ResultPassphraseEntryUuidHex { get; private set; }
+
+        private void UpdatePassphraseEntryVisibility()
+        {
+            var selected = m_passphraseMode.SelectedItem as ModeItem;
+            bool show = (selected != null) && selected.Mode == PassphraseMode.Entry;
+
+            m_passphraseEntryLabel.Visible = show;
+            m_passphraseEntryDisplay.Visible = show;
+            m_passphraseEntrySelect.Visible = show;
+            m_passphraseEntryClear.Visible = show;
+            m_passphraseEntryHint.Visible = show;
+
+            LayOutTail(show);
+        }
+
+        private void OnSelectPassphraseEntry(object sender, EventArgs e)
+        {
+            CredentialSelection selection = m_pickEntry(this);
+            if (selection == null) return;
+
+            m_passphraseEntryUuidHex = selection.UuidHex;
+            m_passphraseEntryDisplay.Text = selection.Display;
+        }
+
+        private void OnClearPassphraseEntry(object sender, EventArgs e)
+        {
+            m_passphraseEntryUuidHex = string.Empty;
+            m_passphraseEntryDisplay.Text = "(none selected)";
+        }
+
+        private void SelectPassphraseMode(PassphraseMode mode)
+        {
+            for (int i = 0; i < m_passphraseMode.Items.Count; i++)
+            {
+                var item = m_passphraseMode.Items[i] as ModeItem;
+                if (item != null && item.Mode == mode) { m_passphraseMode.SelectedIndex = i; return; }
+            }
+            m_passphraseMode.SelectedIndex = 0;
+        }
 
         private static Label Header(string text, int top)
         {
@@ -333,8 +449,21 @@ namespace OneTimeSecret.Ui
             ResultTtlSeconds = ttlSeconds;
             ResultTemplate = m_template.Text;
             ResultAllowInsecureHttp = m_allowInsecureHttp.Checked;
-            ResultGeneratePassphrase = m_generatePassphrase.Checked;
+            var selectedMode = m_passphraseMode.SelectedItem as ModeItem;
+            ResultPassphraseMode = (selectedMode != null) ? selectedMode.Mode : PassphraseMode.Generate;
+
+            // Choosing the stored-passphrase mode without naming an entry would fail at the
+            // moment of sharing, which is the worst time to discover it.
+            if (ResultPassphraseMode == PassphraseMode.Entry && string.IsNullOrEmpty(m_passphraseEntryUuidHex))
+            {
+                Complain("Select the entry that holds the passphrase, or choose a different " +
+                    "passphrase option.");
+                m_passphraseMode.Focus();
+                return;
+            }
+
             ResultCredentialUuidHex = m_credentialUuidHex;
+            ResultPassphraseEntryUuidHex = m_passphraseEntryUuidHex;
 
             DialogResult = DialogResult.OK;
             Close();

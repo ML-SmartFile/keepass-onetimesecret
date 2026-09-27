@@ -1,14 +1,15 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using OneTimeSecret.Core;
 
 namespace OneTimeSecret.Ui
 {
     /// <summary>
-    /// Shows the share link and the receipt link after a successful share.
-    /// Both stay selectable and re-copyable: the clipboard auto-clears after a few
-    /// seconds, and a link lost before it is pasted would leave a live secret online
-    /// with no way to burn it.
+    /// Shows the share link, the passphrase when one was set, and the receipt link.
+    /// Everything stays selectable and re-copyable: the clipboard auto-clears after a few
+    /// seconds, and a link lost before it is pasted would leave a live secret online with
+    /// no way to burn it.
     ///
     /// Deliberately free of KeePass references - the caller supplies the copy action so
     /// clipboard handling (and its auto-clear countdown) lives in one place.
@@ -17,10 +18,15 @@ namespace OneTimeSecret.Ui
     {
         private readonly Action<string> m_copy;
 
-        public ResultForm(string shareUrl, string receiptUrl, Action<string> copy)
+        public ResultForm(string shareUrl, string receiptUrl, string passphrase,
+            int requestedTtlSeconds, int effectiveTtlSeconds, Action<string> copy)
         {
             if (copy == null) throw new ArgumentNullException("copy");
             m_copy = copy;
+
+            bool hasPassphrase = !string.IsNullOrEmpty(passphrase);
+            bool ttlShortened = effectiveTtlSeconds > 0 && requestedTtlSeconds > 0
+                && effectiveTtlSeconds < requestedTtlSeconds;
 
             Text = "OneTimeSecret";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -29,78 +35,130 @@ namespace OneTimeSecret.Ui
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(560, 250);
 
-            Controls.Add(MakeLabel("One-time link - copied to the clipboard:", 12, true));
-            TextBox shareBox = MakeUrlBox(shareUrl, 34);
+            int y = 12;
+
+            // The warning leads rather than trails: missing it is exactly how someone ends up
+            // without the only copy of a live link.
+            var warning = new Label
+            {
+                Text = "The clipboard clears itself in a few seconds. Copy anything you still " +
+                       "need from here before closing this window.",
+                Font = new Font(SystemFonts.DialogFont, FontStyle.Bold),
+                ForeColor = Color.FromArgb(160, 60, 0),
+                Bounds = new Rectangle(14, y, 546, 34)
+            };
+            Controls.Add(warning);
+            y += 42;
+
+            if (effectiveTtlSeconds > 0)
+            {
+                // The server clamps silently, so the requested lifetime is not necessarily the
+                // one the link got. Saying so here is the difference between the user knowing
+                // when their link dies and merely believing they know.
+                var lifetime = new Label
+                {
+                    Text = ttlShortened
+                        ? "Expires in " + TtlOptions.Describe(effectiveTtlSeconds) +
+                          " - shortened by the server from the " +
+                          TtlOptions.Describe(requestedTtlSeconds) + " you asked for."
+                        : "Expires in " + TtlOptions.Describe(effectiveTtlSeconds) + ".",
+                    Font = ttlShortened
+                        ? new Font(SystemFonts.DialogFont, FontStyle.Bold)
+                        : SystemFonts.DialogFont,
+                    ForeColor = ttlShortened ? Color.FromArgb(160, 60, 0) : SystemColors.ControlText,
+                    Bounds = new Rectangle(14, y, 546, 32)
+                };
+                Controls.Add(lifetime);
+                y += ttlShortened ? 38 : 24;
+            }
+
+            Controls.Add(Section("One-time link - already on the clipboard:", y)); y += 22;
+            TextBox shareBox = ValueBox(shareUrl, y);
             Controls.Add(shareBox);
-            Controls.Add(MakeCopyButton(34, delegate { CopyAndFlash(shareBox); }));
+            Controls.Add(CopyButton(y, shareBox));
+            y += 28;
+            Controls.Add(Hint("Opens once. Anyone holding it can read the secret.", y)); y += 28;
 
-            Controls.Add(MakeLabel(
-                "Opens once. Anyone holding it can read the secret.", 66, false));
+            TextBox passphraseBox = null;
+            if (hasPassphrase)
+            {
+                Controls.Add(Section("Passphrase - required to open the link:", y)); y += 22;
+                passphraseBox = ValueBox(passphrase, y);
+                Controls.Add(passphraseBox);
+                Controls.Add(CopyButton(y, passphraseBox));
+                y += 28;
+                Controls.Add(Hint("Not part of the link. Send it by a different channel, or the " +
+                    "passphrase protects nothing.", y));
+                y += 40;
+            }
 
-            Controls.Add(MakeLabel("Receipt link - keep this to burn the secret early:", 108, true));
-            TextBox receiptBox = MakeUrlBox(receiptUrl, 130);
+            Controls.Add(Section("Receipt link - keep this to burn the secret early:", y)); y += 22;
+            TextBox receiptBox = ValueBox(receiptUrl, y);
             Controls.Add(receiptBox);
-            Controls.Add(MakeCopyButton(130, delegate { CopyAndFlash(receiptBox); }));
-
-            Controls.Add(MakeLabel(
-                "The clipboard clears itself shortly. Copy again from here if you need to.",
-                162, false));
+            Controls.Add(CopyButton(y, receiptBox));
+            y += 36;
 
             var close = new Button
             {
                 Text = "Close",
                 DialogResult = DialogResult.OK,
-                Bounds = new Rectangle(460, 200, 85, 27)
+                Bounds = new Rectangle(475, y, 85, 27)
             };
             Controls.Add(close);
 
+            ClientSize = new Size(574, y + 40);
             AcceptButton = close;
             CancelButton = close;
 
-            shareBox.Select(0, shareUrl.Length);
+            // Caret at the start, not a full selection: selecting the whole URL parks the
+            // caret at the end and scrolls the box, so the link reads as truncated.
+            shareBox.Select(0, 0);
             ActiveControl = shareBox;
         }
 
-        private void CopyAndFlash(TextBox box)
-        {
-            m_copy(box.Text);
-            box.Select(0, box.Text.Length);
-            box.Focus();
-        }
-
-        private static Label MakeLabel(string text, int top, bool bold)
+        private static Label Section(string text, int top)
         {
             return new Label
             {
                 Text = text,
-                Bounds = new Rectangle(14, top, 530, 18),
-                Font = bold
-                    ? new Font(SystemFonts.DialogFont, FontStyle.Bold)
-                    : SystemFonts.DialogFont
+                Font = new Font(SystemFonts.DialogFont, FontStyle.Bold),
+                Bounds = new Rectangle(14, top, 546, 18)
             };
         }
 
-        private static TextBox MakeUrlBox(string url, int top)
+        private static Label Hint(string text, int top)
+        {
+            return new Label
+            {
+                Text = text,
+                ForeColor = SystemColors.GrayText,
+                Bounds = new Rectangle(14, top, 546, 28)
+            };
+        }
+
+        private static TextBox ValueBox(string value, int top)
         {
             return new TextBox
             {
-                Text = url ?? string.Empty,
+                Text = value ?? string.Empty,
                 ReadOnly = true,
                 BackColor = SystemColors.Window,
-                Bounds = new Rectangle(14, top, 440, 23)
+                Bounds = new Rectangle(14, top, 456, 23)
             };
         }
 
-        private Button MakeCopyButton(int top, EventHandler onClick)
+        private Button CopyButton(int top, TextBox source)
         {
-            var button = new Button
+            var button = new Button { Text = "Copy", Bounds = new Rectangle(475, top - 1, 85, 25) };
+            button.Click += delegate
             {
-                Text = "Copy",
-                Bounds = new Rectangle(460, top - 1, 85, 25)
+                // Each copy replaces the last, which is why they are separate buttons: the
+                // link and the passphrase must never end up in the same paste.
+                m_copy(source.Text);
+                source.Select(0, source.Text.Length);
+                source.Focus();
             };
-            button.Click += onClick;
             return button;
         }
     }

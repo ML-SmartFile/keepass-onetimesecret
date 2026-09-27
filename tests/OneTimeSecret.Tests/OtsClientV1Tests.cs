@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using OneTimeSecret.Ots;
 using Xunit;
 
@@ -14,9 +15,13 @@ namespace OneTimeSecret.Tests
         {
             private readonly HttpResult m_result;
             private readonly HttpTransportException m_failure;
+            private readonly bool m_throwCancelled;
 
             public StubTransport(HttpResult result) { m_result = result; }
             public StubTransport(HttpTransportException failure) { m_failure = failure; }
+            private StubTransport(bool throwCancelled) { m_throwCancelled = throwCancelled; }
+
+            public static StubTransport Cancelling() { return new StubTransport(true); }
 
             public Uri LastUri { get; private set; }
             public string LastContentType { get; private set; }
@@ -26,7 +31,7 @@ namespace OneTimeSecret.Tests
             public bool WasCalled { get; private set; }
 
             public HttpResult Post(Uri uri, string contentType, byte[] body,
-                string authorizationHeader, int timeoutMs)
+                string authorizationHeader, int timeoutMs, CancellationToken cancellationToken)
             {
                 WasCalled = true;
                 LastUri = uri;
@@ -35,6 +40,7 @@ namespace OneTimeSecret.Tests
                 LastBodyBuffer = body;                              // kept to observe scrubbing
                 LastBodyText = Encoding.UTF8.GetString(body);       // snapshot before the caller zeroes it
 
+                if (m_throwCancelled) throw new OperationCanceledException(cancellationToken);
                 if (m_failure != null) throw m_failure;
                 return m_result;
             }
@@ -359,6 +365,58 @@ namespace OneTimeSecret.Tests
         }
 
         [Fact]
+        public void Share_ReportsTheLifetimeTheServerActuallyApplied()
+        {
+            // eu.onetimesecret.com silently clamps an anonymous share to 7 days rather than
+            // rejecting a longer request, so the requested value is not what the user got.
+            var transport = new StubTransport(new HttpResult(200,
+                "{\"secret_key\":\"SK\",\"metadata_key\":\"MK\",\"ttl\":604800,\"secret_ttl\":604800}"));
+
+            ShareResult result = Client(transport).Share(new ShareRequest(Secret, 2592000));
+
+            Assert.Equal(2592000, result.RequestedTtlSeconds);
+            Assert.Equal(604800, result.EffectiveTtlSeconds);
+            Assert.True(result.TtlWasShortened);
+        }
+
+        [Fact]
+        public void Share_DoesNotClaimShorteningWhenTheServerHonouredTheRequest()
+        {
+            var transport = new StubTransport(new HttpResult(200,
+                "{\"secret_key\":\"SK\",\"metadata_key\":\"MK\",\"ttl\":86400,\"secret_ttl\":86400}"));
+
+            ShareResult result = Client(transport).Share(new ShareRequest(Secret, 86400));
+
+            Assert.Equal(86400, result.EffectiveTtlSeconds);
+            Assert.False(result.TtlWasShortened);
+        }
+
+        [Fact]
+        public void Share_TreatsAMissingTtlAsUnknownRatherThanShortened()
+        {
+            // A self-hosted instance that omits the field must not make us claim the lifetime
+            // was cut - saying nothing is better than saying something false.
+            var transport = new StubTransport(new HttpResult(200,
+                "{\"secret_key\":\"SK\",\"metadata_key\":\"MK\"}"));
+
+            ShareResult result = Client(transport).Share(new ShareRequest(Secret, 2592000));
+
+            Assert.Equal(0, result.EffectiveTtlSeconds);
+            Assert.False(result.TtlWasShortened);
+        }
+
+        [Fact]
+        public void Share_AcceptsATtlReturnedAsAString()
+        {
+            var transport = new StubTransport(new HttpResult(200,
+                "{\"secret_key\":\"SK\",\"metadata_key\":\"MK\",\"secret_ttl\":\"604800\"}"));
+
+            ShareResult result = Client(transport).Share(new ShareRequest(Secret, 2592000));
+
+            Assert.Equal(604800, result.EffectiveTtlSeconds);
+        }
+
+        [Fact]
         public void Share_NeverPutsTheApiTokenInAnErrorMessage()
         {
             var credentials = new OtsCredentials("me@example.com", "sup3r-s3cret-token");
@@ -378,6 +436,94 @@ namespace OneTimeSecret.Tests
 
                 Assert.DoesNotContain("sup3r-s3cret-token", ex.ToString());
             }
+        }
+
+        [Fact]
+        public void Share_OmitsPassphraseAndRecipientWhenNotSet()
+        {
+            var transport = Success();
+            Client(transport).Share(new ShareRequest(Secret, 86400));
+
+            Assert.DoesNotContain("passphrase=", transport.LastBodyText);
+            Assert.DoesNotContain("recipient=", transport.LastBodyText);
+        }
+
+        [Fact]
+        public void Share_SendsThePassphraseWhenSet()
+        {
+            var transport = Success();
+            Client(transport).Share(new ShareRequest(Secret, 86400, "Corr3ctHorse", null));
+
+            Assert.Contains("passphrase=Corr3ctHorse", transport.LastBodyText);
+        }
+
+        [Fact]
+        public void Share_EscapesThePassphrase()
+        {
+            var transport = Success();
+            Client(transport).Share(new ShareRequest(Secret, 86400, "a&b=c d", null));
+
+            Assert.Contains("passphrase=" + Uri.EscapeDataString("a&b=c d"), transport.LastBodyText);
+            // An unescaped '&' would silently split into another form field.
+            Assert.DoesNotContain("passphrase=a&b=c", transport.LastBodyText);
+        }
+
+        [Fact]
+        public void Share_SendsTheRecipientWhenSet()
+        {
+            var transport = Success();
+            Client(transport).Share(new ShareRequest(Secret, 86400, null, "them@example.com"));
+
+            Assert.Contains("recipient=" + Uri.EscapeDataString("them@example.com"), transport.LastBodyText);
+        }
+
+        [Fact]
+        public void Share_KeepsThePassphraseOutOfTheShareUrl()
+        {
+            // The whole point of a passphrase is that it travels separately from the link.
+            ShareResult result = Client(Success())
+                .Share(new ShareRequest(Secret, 86400, "Corr3ctHorse", null));
+
+            Assert.DoesNotContain("Corr3ctHorse", result.ShareUrl);
+            Assert.DoesNotContain("Corr3ctHorse", result.ReceiptUrl);
+        }
+
+        [Fact]
+        public void Share_NeverPutsThePassphraseInAnErrorMessage()
+        {
+            var transport = new StubTransport(new HttpResult(500, "<html>boom</html>"));
+            var ex = Assert.ThrowsAny<Exception>(() =>
+                Client(transport).Share(new ShareRequest(Secret, 86400, "Corr3ctHorse", null)));
+
+            Assert.DoesNotContain("Corr3ctHorse", ex.ToString());
+        }
+
+        [Fact]
+        public void Share_LetsCancellationPropagateRatherThanWrappingItAsAnError()
+        {
+            // Cancellation is not a failure to report to the user - the UI has already
+            // moved on - so it must not arrive dressed up as an OtsException.
+            var transport = StubTransport.Cancelling();
+
+            using (var cts = new CancellationTokenSource())
+            {
+                Assert.Throws<OperationCanceledException>(() =>
+                    Client(transport).Share(new ShareRequest(Secret, 86400), cts.Token));
+            }
+        }
+
+        [Fact]
+        public void Share_StillZeroesTheBodyWhenCancelled()
+        {
+            var transport = StubTransport.Cancelling();
+
+            using (var cts = new CancellationTokenSource())
+            {
+                Assert.Throws<OperationCanceledException>(() =>
+                    Client(transport).Share(new ShareRequest(Secret, 86400), cts.Token));
+            }
+
+            Assert.True(transport.LastBodyBuffer.All(b => b == 0));
         }
     }
 }

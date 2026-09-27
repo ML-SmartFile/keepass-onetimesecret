@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 
 namespace OneTimeSecret.Ots
 {
@@ -12,8 +13,13 @@ namespace OneTimeSecret.Ots
         /// <summary>
         /// Posts a body. <paramref name="authorizationHeader"/> is null for anonymous
         /// requests; when set it is sent verbatim as the Authorization header.
+        ///
+        /// Throws <see cref="OperationCanceledException"/> if the token is cancelled. Note
+        /// that cancelling only stops us waiting - the server may already have created the
+        /// secret, and callers must not imply otherwise.
         /// </summary>
-        HttpResult Post(Uri uri, string contentType, byte[] body, string authorizationHeader, int timeoutMs);
+        HttpResult Post(Uri uri, string contentType, byte[] body, string authorizationHeader,
+            int timeoutMs, CancellationToken cancellationToken);
     }
 
     public sealed class HttpResult
