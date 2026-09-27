@@ -1,0 +1,14 @@
+localhost:8443 {
+	tls internal
+	reverse_proxy onetimesecret:3000
+}
+
+# Plain HTTP on its own port, deliberately separate from the self-signed 8443 above: a
+# path-prefixed base URL and a self-signed certificate are two different things to prove
+# work, and testing them together would leave the path-prefix case unverifiable without
+# first trusting the cert.
+:8080 {
+	handle_path /ots/* {
+		reverse_proxy onetimesecret:3000
+	}
+}

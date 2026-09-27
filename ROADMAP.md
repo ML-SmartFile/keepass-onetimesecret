@@ -404,3 +404,45 @@ in full here because the pattern (docs vs. reality) is worth carrying into M5.
   milestone's burn investigation. Deleted immediately (it was never staged or committed),
   and the user was told to rotate it. Recorded here as a reason to keep the "credentials
   never leave the user's own database" rule absolute even for one-off debugging.
+
+<!-- M5: -->
+**M5 — 2026-09-27.** Docker-based local instance, path-prefixed base URLs, and the
+integration test suite. All three acceptance criteria verified — the automated
+integration tests hit the local instance directly over the real network, and the user
+additionally ran a full authenticated share → reveal → burn cycle through the actual
+plugin UI against it, closing the one gap the automated suite couldn't reach (see below).
+A step up from every prior milestone's manual-only verification, made possible because
+this milestone added no new UI (CLAUDE.md's manual-smoke-test rule is specifically for
+UI/KeePass-API-touching changes; this one only proves existing client code against new
+infrastructure) — the manual check happened anyway and paid off.
+
+- **Path-prefixed base URLs already worked, since M1.** `UrlPolicy` and both clients
+  already handled a path prefix correctly and already had unit coverage for it
+  (`Share_HonoursAPathPrefixedBaseUrl` in both `OtsClientV1Tests` and
+  `OtsClientV2Tests`). M5's contribution was proving it against a real reverse proxy
+  that actually strips the prefix (`docker/Caddyfile`'s `handle_path /ots/*`) rather
+  than a unit test's synthetic URL — genuinely new evidence, not new code.
+- **The self-signed-certificate case needed no code either** — non-negotiable #6 means
+  there was never a bypass to remove. `SelfSignedCertificate_IsRejectedWithNoOptionToProceed`
+  exercises the real TLS handshake against Caddy's `tls internal` cert and confirms the
+  rejection, which is the difference between "the code has no bypass" and "the code has
+  no bypass and a real self-signed cert actually gets refused."
+- **Path-prefix and self-signed-cert had to be tested on separate ports.** Putting the
+  prefixed route behind the same self-signed HTTPS listener would have made the
+  prefix test also exercise (and be blocked by) certificate rejection, conflating two
+  independent things to prove. Split across `:8443` (cert only) and `:8080/ots`
+  (prefix only, plain HTTP) in `docker/Caddyfile`.
+- **`burn` was not re-verified by the automated integration suite** — the self-hosted OTS
+  image has no API endpoint for account creation (confirmed against the same published
+  docs that found the `continue` field in M4 — only a web-form signup exists), so the
+  integration tests above cover anonymous share-and-reveal against the local instance
+  only. **Covered instead by the user's own manual smoke test**: signed up for an
+  account through the local instance's web UI, then ran a full authenticated
+  share → reveal → burn cycle through the actual plugin against
+  `http://localhost:3000` — confirmed working.
+- New `tests/OneTimeSecret.IntegrationTests` project, deliberately separate from the
+  unit suite (never touched by `dotnet test tests/OneTimeSecret.Tests`) and additionally
+  gated per-test on its own `OTS_TEST_*` environment variable, so it is harmless even if
+  run by accident with no instance up — confirmed both by running it with no variables
+  set (4/4 pass trivially, sub-millisecond) and with them set against the live
+  containers (5/5 pass with real network timing, 60ms-1s per test).

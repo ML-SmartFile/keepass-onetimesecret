@@ -21,6 +21,10 @@ msbuild src/OneTimeSecret/OneTimeSecret.csproj /p:Configuration=Debug
 
 # Unit tests — must pass with no KeePass installed
 dotnet test tests/OneTimeSecret.Tests
+
+# Integration tests — real network, gated behind OTS_TEST_*, never run by the above.
+# See README.md for the local Docker instance this is meant to run against.
+dotnet test tests/OneTimeSecret.IntegrationTests
 ```
 
 KeePass caches loaded plugins. **Restart KeePass after every rebuild.** If a change
