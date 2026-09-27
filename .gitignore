@@ -427,3 +427,7 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Local-machine-only automation (PC-26-Klaus remote-control setup).
+# Never published — scoped to this machine/account, not the project.
+/local/
