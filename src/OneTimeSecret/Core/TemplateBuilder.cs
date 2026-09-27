@@ -91,9 +91,33 @@ namespace OneTimeSecret.Core
 
         public static bool ContainsMessageToken(string template)
         {
+            return ContainsToken(template, SecretComposer.FieldMessage);
+        }
+
+        /// <summary>
+        /// Which of the known field placeholders actually appear in a template, read
+        /// directly from the text rather than from separately-tracked checkbox state. The
+        /// two can diverge - the template stays directly editable (SPEC.md section 6) - and
+        /// a stale checkbox reading would misdescribe what is actually about to be sent.
+        /// Used by Quick Share, which has no checkboxes of its own to read.
+        /// </summary>
+        public static TemplateFields FieldsPresentIn(string template)
+        {
+            return new TemplateFields
+            {
+                Title = ContainsToken(template, SecretComposer.FieldTitle),
+                UserName = ContainsToken(template, SecretComposer.FieldUserName),
+                Password = ContainsToken(template, SecretComposer.FieldPassword),
+                Url = ContainsToken(template, SecretComposer.FieldUrl),
+                Notes = ContainsToken(template, SecretComposer.FieldNotes),
+                Message = ContainsMessageToken(template),
+            };
+        }
+
+        private static bool ContainsToken(string template, string fieldName)
+        {
             return !string.IsNullOrEmpty(template)
-                && template.IndexOf("{" + SecretComposer.FieldMessage + "}",
-                       StringComparison.OrdinalIgnoreCase) >= 0;
+                && template.IndexOf("{" + fieldName + "}", StringComparison.OrdinalIgnoreCase) >= 0;
         }
     }
 }

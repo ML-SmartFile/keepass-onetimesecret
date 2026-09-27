@@ -185,30 +185,9 @@ one's acceptance criteria are met and manually verified in a running KeePass.
 
 ## Backlog — requested, not yet scheduled
 
-### Quick Share with OneTimeSecret
-
-A second entry-context-menu item that shares immediately using the configured defaults —
-template, lifetime, passphrase mode — without opening `ShareForm`. Requested 2026-09-24:
-the full dialog is right when composing a share deliberately, but it is friction for the
-common case of "send this entry as configured".
-
-Roughly the M1/M2 behaviour, which M3 replaced with the dialog, so the plumbing already
-existed once and can be recovered from git history.
-
-**Design tensions to resolve before building it — do not just skip the dialog:**
-
-- **`SPEC.md` §2 requires that "the confirmation dialog must display the exact target host
-  and the exact fields being transmitted before any request is made."** A quick share
-  bypasses exactly that. Either the invariant gets an explicit, documented exception for
-  this path, or quick share needs a minimal confirmation (host + field list + Share/Cancel)
-  that is still one keystroke. Silently dropping a stated security invariant is not an
-  option.
-- **The result dialog cannot be skipped too.** If `GeneratePassphrase` is on, a quick share
-  still generates one, and the passphrase exists nowhere else — skipping `ResultForm` would
-  destroy it and leave a share nobody can open. Same for the receipt link.
-- **The anonymous-fallback warning must still fire.** A deleted or emptied credential entry
-  silently downgrading a "quick" share to anonymous is worse here than in the dialog path,
-  because there is no other moment where the user would notice.
+Empty. Quick Share (requested 2026-09-24) was the only entry; built 2026-09-27 on branch
+`backlog-quick-share` — see the progress notes below for how its three design tensions
+were resolved.
 
 ---
 
@@ -446,3 +425,43 @@ infrastructure) — the manual check happened anyway and paid off.
   run by accident with no instance up — confirmed both by running it with no variables
   set (4/4 pass trivially, sub-millisecond) and with them set against the live
   containers (5/5 pass with real network timing, 60ms-1s per test).
+
+<!-- backlog-quick-share: -->
+**Quick Share — 2026-09-27.** Cleared the backlog before starting M6, per the user's
+request. Resolved the backlog note's own open questions:
+
+- **SPEC.md section 2's confirmation requirement**: the backlog note's own wording
+  ("silently dropping a stated security invariant is not an option") already pointed at
+  the resolution — one `MessageBox` (entry title, exact field list, exact host,
+  OK/Cancel) standing in for `ShareForm`'s confirmation. Built as described, not
+  re-litigated.
+- **`PassphraseMode.Manual`**, the one real gap the backlog note did not address (Manual
+  needs a per-share prompt Quick Share has no dialog for): falls back to generating a
+  passphrase instead of asking, decided by the user rather than assumed.
+- **Menu placement** was no longer an open question by the time this was built — M4's
+  "OneTimeSecret" entry-context submenu already existed, so Quick Share is a third
+  `DropDownItems` entry there (Share… / Quick Share… / Burn Last Share…), not a new
+  design problem.
+
+Smoke-tested by the user against `eu.onetimesecret.com`; found one real bug and one
+cosmetic issue in the process, both fixed:
+
+- **The "any fields configured?" gate read the wrong source.** It checked
+  `config.IncludeTitle`/`IncludeUserName`/etc — the last-used checkbox state written back
+  by `ShareForm` — not the actual template text, which stays independently hand-editable
+  in Options. Clearing the template in Options left those flags untouched, so Quick Share
+  would have silently sent an **empty secret** while its own confirmation dialog still
+  claimed "user name, password" — the confirmation would have been describing fields
+  that were not actually in what got sent, directly undermining SPEC.md section 2's
+  "exact fields being transmitted" requirement. Fixed by reading the field list from
+  `TemplateBuilder.FieldsPresentIn(config.Template)` (new — scans the literal template
+  text for known placeholders) instead of the checkbox flags, for both the confirmation
+  text and the refusal gate. Confirmed fixed: an emptied template now refuses cleanly.
+- Confirmation phrasing: "Share X's user name, password with host?" read awkwardly
+  (comma-joined list, no "and"; the possessive breaks on a title that already has an
+  apostrophe in it). Changed to "Share user name and password from "X" with host?" with
+  natural-language list joining, plus a line break before "with {host}" per the user's
+  suggestion.
+- One error seen during testing (an account-plan-limitation message on a too-long
+  default TTL) was expected behaviour confirming M4's error-message fix still works
+  through this new code path, not a new bug.
