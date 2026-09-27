@@ -539,7 +539,7 @@ namespace OneTimeSecret.Tests
             // Verified against api.onetimesecret.com's published docs: v1 has its own
             // (deprecated but present) burn endpoint, form-encoded like the rest of v1, and
             // "continue" is a required field there too - not just on v2's variants.
-            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"burned\"}"));
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
             Client(transport).Burn("METAKEY", CancellationToken.None);
 
             Assert.Equal("https://eu.onetimesecret.com/api/v1/private/METAKEY/burn",
@@ -551,16 +551,32 @@ namespace OneTimeSecret.Tests
         [Fact]
         public void Burn_ReturnsBurnedTrueWhenStateTransitionsToBurned()
         {
-            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"burned\"}"));
+            // Verified against api.onetimesecret.com's published docs: the burn response
+            // nests everything under a top-level "state" object, with the actual status at
+            // state.state - not a bare top-level "state" string. Caught by code review: an
+            // earlier version of the client read the wrong level and would have reported
+            // every real burn as unconfirmed.
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
             BurnResult result = Client(transport).Burn("METAKEY", CancellationToken.None);
 
             Assert.True(result.Burned);
         }
 
         [Fact]
+        public void Burn_TreatsATopLevelStateStringAsUnconfirmedRatherThanMisreadingIt()
+        {
+            // Regression guard for the bug above: the old (wrong) flat shape must not be
+            // silently accepted as success just because it happens to still parse as JSON.
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"burned\"}"));
+            BurnResult result = Client(transport).Burn("METAKEY", CancellationToken.None);
+
+            Assert.False(result.Burned);
+        }
+
+        [Fact]
         public void Burn_ReturnsBurnedFalseWithDetailWhenStateDidNotChange()
         {
-            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"new\"}"));
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"new\"}}"));
             BurnResult result = Client(transport).Burn("METAKEY", CancellationToken.None);
 
             Assert.False(result.Burned);
@@ -587,7 +603,7 @@ namespace OneTimeSecret.Tests
         [Fact]
         public void Burn_RejectsAnEmptyReceiptKey()
         {
-            var transport = new StubTransport(new HttpResult(200, "{\"state\":\"burned\"}"));
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
             Assert.Throws<ArgumentException>(() => Client(transport).Burn("", CancellationToken.None));
         }
     }

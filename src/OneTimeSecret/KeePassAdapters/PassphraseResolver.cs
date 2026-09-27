@@ -47,9 +47,12 @@ namespace OneTimeSecret.KeePassAdapters
 
             PwEntry entry = database.RootGroup.FindEntry(uuid, true);
             if (entry == null)
+                // Not "no longer exists" - see CredentialResolver's identical fix. The entry
+                // may simply live in a different, currently-inactive database.
                 return new PassphraseResolution(null,
-                    "The entry configured to supply the passphrase no longer exists. " +
-                    "Pick a new one in the OneTimeSecret options.");
+                    "The entry configured to supply the passphrase was not found in this " +
+                    "database. If it lives in a different database, open that one first; " +
+                    "otherwise pick a new one in the OneTimeSecret options.");
 
             string passphrase = EntryFieldReader.ReadResolvedField(entry, database, PwDefs.PasswordField);
             if (string.IsNullOrEmpty(passphrase))
@@ -69,7 +72,7 @@ namespace OneTimeSecret.KeePassAdapters
                 return "(configured, but the database is not open)";
 
             PwEntry entry = database.RootGroup.FindEntry(uuid, true);
-            if (entry == null) return "(the configured entry no longer exists)";
+            if (entry == null) return "(not found in this database - may exist in another)";
 
             string title = entry.Strings.ReadSafe(PwDefs.TitleField);
             return string.IsNullOrEmpty(title) ? "(untitled entry)" : title;

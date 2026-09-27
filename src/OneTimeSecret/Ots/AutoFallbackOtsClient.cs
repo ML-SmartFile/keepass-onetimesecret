@@ -7,8 +7,13 @@ namespace OneTimeSecret.Ots
     /// Wraps a v2 client with a one-shot fallback to v1 per SPEC.md section 8: "404 on a v2
     /// endpoint -> re-run capability detection once, then retry as v1". Only used when the
     /// configured API version is "auto" - a cached "v2" can go stale if a self-hosted
-    /// instance is downgraded between the last probe and now. Applies to both Share and
-    /// Burn - v1 has its own (deprecated but present) burn endpoint.
+    /// instance is downgraded between the last probe and now.
+    ///
+    /// Share and Burn both retry once as v1 on a 404, but only Share writes the result to
+    /// the cache. A 404 from Burn is at least as likely to mean "this receipt is gone"
+    /// (expired, already burned, or from a different host) as "wrong API version" - caching
+    /// v1 off that guess would silently downgrade every later Share on this host for up to
+    /// 7 days over what might not even be a real version mismatch.
     /// </summary>
     public sealed class AutoFallbackOtsClient : IOtsClient
     {
@@ -56,7 +61,7 @@ namespace OneTimeSecret.Ots
             {
                 if (ex.StatusCode != 404) throw;
 
-                if (m_onFallback != null) m_onFallback();
+                // Deliberately no m_onFallback() here - see the class remarks above.
                 return m_fallbackFactory().Burn(receiptKey, cancellationToken);
             }
         }

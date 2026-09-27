@@ -37,20 +37,20 @@ namespace OneTimeSecret.Tests
         private sealed class FakeCache : IApiVersionCache
         {
             public string CachedVersion;
-            public string CachedHost;
+            public string CachedKey;
             public DateTime CachedAtUtc;
             public bool Fresh;
 
-            public string TryGetCachedVersion(string host, TimeSpan maxAge)
+            public string TryGetCachedVersion(string cacheKey, TimeSpan maxAge)
             {
                 if (CachedVersion == null) return null;
-                if (!string.Equals(CachedHost, host, StringComparison.OrdinalIgnoreCase)) return null;
+                if (!string.Equals(CachedKey, cacheKey, StringComparison.OrdinalIgnoreCase)) return null;
                 return Fresh ? CachedVersion : null;
             }
 
-            public void SetCachedVersion(string host, string version)
+            public void SetCachedVersion(string cacheKey, string version)
             {
-                CachedHost = host;
+                CachedKey = cacheKey;
                 CachedVersion = version;
                 CachedAtUtc = DateTime.UtcNow;
                 Fresh = true;
@@ -105,7 +105,7 @@ namespace OneTimeSecret.Tests
         {
             var transport = new StubTransport(new HttpResult(200, "{}"));
             var cache = new FakeCache();
-            cache.SetCachedVersion("eu.onetimesecret.com", OtsClientFactory.VersionV1);
+            cache.SetCachedVersion("https://eu.onetimesecret.com", OtsClientFactory.VersionV1);
 
             string version = OtsClientFactory.Detect(
                 new Uri("https://eu.onetimesecret.com"), transport, 1000, cache, CancellationToken.None);
@@ -119,10 +119,28 @@ namespace OneTimeSecret.Tests
         {
             var transport = new StubTransport(new HttpResult(200, "{}"));
             var cache = new FakeCache();
-            cache.SetCachedVersion("other.example.com", OtsClientFactory.VersionV1);
+            cache.SetCachedVersion("https://other.example.com", OtsClientFactory.VersionV1);
 
             string version = OtsClientFactory.Detect(
                 new Uri("https://eu.onetimesecret.com"), transport, 1000, cache, CancellationToken.None);
+
+            Assert.Equal(OtsClientFactory.VersionV2, version);
+            Assert.Equal(1, transport.CallCount);
+        }
+
+        [Fact]
+        public void Detect_ProbesAgainWhenTheCacheIsForADifferentPortOnTheSameHost()
+        {
+            // Verified live in M5's own Docker setup: the hosted service and a self-hosted
+            // instance can share a hostname (localhost) on different ports, or the same
+            // instance can be reachable both bare and under a path prefix. A host-only cache
+            // key would have conflated all of these. Found by code review.
+            var transport = new StubTransport(new HttpResult(200, "{}"));
+            var cache = new FakeCache();
+            cache.SetCachedVersion("http://localhost:3000", OtsClientFactory.VersionV1);
+
+            string version = OtsClientFactory.Detect(
+                new Uri("http://localhost:8080/ots"), transport, 1000, cache, CancellationToken.None);
 
             Assert.Equal(OtsClientFactory.VersionV2, version);
             Assert.Equal(1, transport.CallCount);
@@ -133,7 +151,7 @@ namespace OneTimeSecret.Tests
         {
             var transport = new StubTransport(new HttpResult(200, "{}"));
             var cache = new FakeCache();
-            cache.SetCachedVersion("eu.onetimesecret.com", OtsClientFactory.VersionV1);
+            cache.SetCachedVersion("https://eu.onetimesecret.com", OtsClientFactory.VersionV1);
             cache.Fresh = false; // simulates older than the 7-day cache lifetime
 
             string version = OtsClientFactory.Detect(
@@ -153,7 +171,7 @@ namespace OneTimeSecret.Tests
                 new Uri("https://eu.onetimesecret.com"), transport, 1000, cache, CancellationToken.None);
 
             Assert.Equal(OtsClientFactory.VersionV2, cache.CachedVersion);
-            Assert.Equal("eu.onetimesecret.com", cache.CachedHost);
+            Assert.Equal("https://eu.onetimesecret.com", cache.CachedKey);
         }
 
         [Fact]
@@ -267,6 +285,24 @@ namespace OneTimeSecret.Tests
             client.Burn("RK", CancellationToken.None);
 
             Assert.True(fallback.WasCalled);
+        }
+
+        [Fact]
+        public void Burn_DoesNotPoisonTheVersionCacheOnA404()
+        {
+            // Unlike Share, a 404 from Burn does not mean "wrong API version" as reliably -
+            // it is at least as likely to mean the receipt itself is gone (expired, already
+            // burned, from a different host). Caching v1 off that guess would silently
+            // downgrade every later Share on this host for up to 7 days. Found by code
+            // review before this was ever exercised live.
+            var primary = new StubClient(new OtsException("stale", 404, null, null));
+            var fallback = new StubClient(FakeResult());
+            bool cacheWritten = false;
+
+            var client = new AutoFallbackOtsClient(primary, () => fallback, () => cacheWritten = true);
+            client.Burn("RK", CancellationToken.None);
+
+            Assert.False(cacheWritten);
         }
 
         [Fact]

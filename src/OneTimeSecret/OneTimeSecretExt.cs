@@ -22,6 +22,7 @@ namespace OneTimeSecret
         private ToolStripMenuItem m_quickShareMenuItem;
         private ToolStripMenuItem m_burnMenuItem;
         private bool m_quickShareInFlight;
+        private bool m_burnInFlight;
 
         public override bool Initialize(IPluginHost host)
         {
@@ -101,7 +102,7 @@ namespace OneTimeSecret
             if (m_burnMenuItem == null) return;
 
             PwEntry entry = singleSelected ? m_host.MainWindow.GetSelectedEntry(true) : null;
-            m_burnMenuItem.Enabled = singleSelected && ReceiptWriter.HasReceipt(entry);
+            m_burnMenuItem.Enabled = singleSelected && !m_burnInFlight && ReceiptWriter.HasReceipt(entry);
         }
 
         private void OnShareClick(object sender, EventArgs e)
@@ -125,7 +126,7 @@ namespace OneTimeSecret
                 baseUri = UrlPolicy.Validate(config.BaseUrl, config.AllowInsecureHttp);
 
                 CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database);
-                if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning))
+                if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning, "Share"))
                     return;
 
                 credentials = resolution.Credentials;
@@ -199,7 +200,7 @@ namespace OneTimeSecret
 
                 if (answer != DialogResult.OK || form.Result == null) return;
 
-                if (config.WriteBackReceipt) WriteBackReceipt(mainWindow, entry, form.Result);
+                if (config.WriteBackReceipt) WriteBackReceipt(mainWindow, m_host.Database, entry, form.Result);
 
                 OnShareSucceeded(mainWindow, form.Result, form.PassphraseUsed, entry);
             }
@@ -210,9 +211,8 @@ namespace OneTimeSecret
         /// database locked between dispatch and here) must not turn a successful share into
         /// an error dialog. The user already has the link either way.
         /// </summary>
-        private void WriteBackReceipt(MainForm mainWindow, PwEntry entry, ShareResult result)
+        private void WriteBackReceipt(MainForm mainWindow, PwDatabase database, PwEntry entry, ShareResult result)
         {
-            PwDatabase database = m_host.Database;
             if (database == null || !database.IsOpen) return;
 
             PwEntry current = database.RootGroup.FindEntry(entry.Uuid, true);
@@ -262,6 +262,12 @@ namespace OneTimeSecret
             PwEntry entry = mainWindow.GetSelectedEntry(true);
             if (entry == null) return;
 
+            // Captured now, not re-read when the response arrives: unlike ShareForm, nothing
+            // here is modal, so the active tab can change or the database can lock while the
+            // request is in flight. The receipt write-back and the result must still refer
+            // back to where the entry actually came from, not whatever is active later.
+            PwDatabase sourceDatabase = m_host.Database;
+
             var config = new PluginConfig(m_host.CustomConfig);
 
             Dictionary<string, string> fields;
@@ -273,7 +279,7 @@ namespace OneTimeSecret
                 baseUri = UrlPolicy.Validate(config.BaseUrl, config.AllowInsecureHttp);
 
                 CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database);
-                if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning))
+                if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning, "Share"))
                     return;
 
                 credentials = resolution.Credentials;
@@ -318,6 +324,16 @@ namespace OneTimeSecret
             compositionValues[SecretComposer.FieldMessage] = string.Empty;
             string composed = SecretComposer.Compose(config.Template, compositionValues);
 
+            // FieldsPresentIn can only over-report relative to what actually substitutes -
+            // a template of just "{MESSAGE}", or a {URL} on an entry with no URL, passes
+            // that check yet composes to nothing. Same guard ShareForm already has.
+            if (string.IsNullOrEmpty(composed.Trim()))
+            {
+                ShowError(mainWindow, "There is nothing to share - the configured template " +
+                    "produced no content for this entry.");
+                return;
+            }
+
             PassphraseMode mode = config.PassphraseMode;
             string passphrase = null;
             if (mode == PassphraseMode.Generate || mode == PassphraseMode.Manual)
@@ -361,7 +377,7 @@ namespace OneTimeSecret
                     failure = ex;
                 }
 
-                mainWindow.Invoke(new MethodInvoker(delegate
+                SafeInvoke(mainWindow, new MethodInvoker(delegate
                 {
                     m_quickShareInFlight = false;
                     mainWindow.SetStatusEx(null);
@@ -375,7 +391,23 @@ namespace OneTimeSecret
                         return;
                     }
 
-                    if (config.WriteBackReceipt) WriteBackReceipt(mainWindow, entry, result);
+                    // The database this entry came from may have locked, or a different one
+                    // may now be active, while the request was in flight - checked against
+                    // the captured reference, not whatever m_host.Database is right now.
+                    bool sourceStillOpen = sourceDatabase != null && sourceDatabase.IsOpen;
+
+                    if (config.WriteBackReceipt && sourceStillOpen)
+                        WriteBackReceipt(mainWindow, sourceDatabase, entry, result);
+
+                    if (!sourceStillOpen)
+                    {
+                        MessageBox.Show(mainWindow,
+                            "The database was locked or is no longer open, so the result " +
+                            "cannot be shown here. The share itself may have succeeded - " +
+                            "check your OneTimeSecret account, or share again.",
+                            "OneTimeSecret", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
 
                     OnShareSucceeded(mainWindow, result, passphrase, entry);
                 }));
@@ -442,6 +474,13 @@ namespace OneTimeSecret
                 config.PassphraseMode = form.ResultPassphraseMode;
                 config.CredentialEntryUuid = ParseUuid(form.ResultCredentialUuidHex);
                 config.PassphraseEntryUuid = ParseUuid(form.ResultPassphraseEntryUuidHex);
+
+                // SPEC.md section 5: re-probe capability "when the user hits Save in the
+                // options dialog". OtsClientV2's own 404 message tells the user to do
+                // exactly this to clear a stale cache - this is what makes that true.
+                // Clearing here rather than re-probing synchronously keeps this dialog free
+                // of a network call; the next share picks it up lazily.
+                config.DetectedVersion = string.Empty;
             }
         }
 
@@ -474,7 +513,7 @@ namespace OneTimeSecret
                 return new AutoFallbackOtsClient(
                     v2,
                     delegate { return (IOtsClient)new OtsClientV1(baseUri, transport, credentials, timeoutMs); },
-                    delegate { cache.SetCachedVersion(baseUri.Host, OtsClientFactory.VersionV1); });
+                    delegate { cache.SetCachedVersion(OtsClientFactory.CacheKey(baseUri), OtsClientFactory.VersionV1); });
             };
         }
 
@@ -483,8 +522,15 @@ namespace OneTimeSecret
             MainForm mainWindow = (m_host != null) ? m_host.MainWindow : null;
             if (mainWindow == null) return;
 
+            if (m_burnInFlight) return;
+
             PwEntry entry = mainWindow.GetSelectedEntry(true);
             if (entry == null) return;
+
+            // Captured now, not re-read when the response arrives - same reasoning as
+            // Quick Share: nothing here is modal, so the active tab or lock state can
+            // change while the request is in flight.
+            PwDatabase sourceDatabase = m_host.Database;
 
             string receiptKey = ReceiptWriter.TryReadReceiptKey(entry);
             if (string.IsNullOrEmpty(receiptKey))
@@ -511,7 +557,7 @@ namespace OneTimeSecret
                 // Same confirm-or-abort gate as sharing: degrading to an anonymous request
                 // for a destructive action deserves the same explicit confirmation sharing
                 // anonymously does, rather than silently trying and failing.
-                if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning))
+                if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning, "Burn"))
                     return;
 
                 credentials = resolution.Credentials;
@@ -530,6 +576,7 @@ namespace OneTimeSecret
                 BuildClientFactory(config, baseUri, credentials, proxy, timeoutMs);
 
             PwUuid entryUuid = entry.Uuid;
+            m_burnInFlight = true;
             mainWindow.SetStatusEx("Burning the last OneTimeSecret share...");
 
             ThreadPool.QueueUserWorkItem(delegate
@@ -545,8 +592,9 @@ namespace OneTimeSecret
                     failure = ex;
                 }
 
-                mainWindow.Invoke(new MethodInvoker(delegate
+                SafeInvoke(mainWindow, new MethodInvoker(delegate
                 {
+                    m_burnInFlight = false;
                     mainWindow.SetStatusEx(null);
 
                     if (failure != null)
@@ -565,10 +613,9 @@ namespace OneTimeSecret
                         return;
                     }
 
-                    PwDatabase database = m_host.Database;
-                    if (database != null && database.IsOpen)
+                    if (sourceDatabase != null && sourceDatabase.IsOpen)
                     {
-                        PwEntry current = database.RootGroup.FindEntry(entryUuid, true);
+                        PwEntry current = sourceDatabase.RootGroup.FindEntry(entryUuid, true);
                         if (current != null)
                         {
                             ReceiptWriter.Remove(current);
@@ -671,10 +718,10 @@ namespace OneTimeSecret
         /// Credentials were configured but could not be used. Warn and let the user abort
         /// rather than quietly sending as anonymous, which carries a shorter maximum TTL.
         /// </summary>
-        private static bool ConfirmAnonymousFallback(MainForm mainWindow, string warning)
+        private static bool ConfirmAnonymousFallback(MainForm mainWindow, string warning, string action)
         {
             DialogResult answer = MessageBox.Show(mainWindow,
-                warning + Environment.NewLine + Environment.NewLine + "Share anonymously anyway?",
+                warning + Environment.NewLine + Environment.NewLine + action + " anonymously anyway?",
                 "OneTimeSecret", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
 
             return answer == DialogResult.OK;
@@ -684,6 +731,25 @@ namespace OneTimeSecret
         {
             MessageBox.Show(mainWindow, message, "OneTimeSecret",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        /// <summary>
+        /// Marshals back to the UI thread from a thread-pool callback, tolerating the main
+        /// window having gone away while the request was in flight (KeePass closing while
+        /// Quick Share or Burn is running - neither is modal, so nothing prevents that). An
+        /// unguarded Invoke on a disposed window throws on the thread-pool thread, which is
+        /// an unhandled exception under .NET Framework and takes the whole process down.
+        /// </summary>
+        private static void SafeInvoke(MainForm mainWindow, MethodInvoker action)
+        {
+            if (mainWindow.IsDisposed || !mainWindow.IsHandleCreated) return;
+
+            try
+            {
+                mainWindow.Invoke(action);
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
     }
 }
