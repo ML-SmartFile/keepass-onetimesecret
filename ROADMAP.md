@@ -407,12 +407,14 @@ in full here because the pattern (docs vs. reality) is worth carrying into M5.
 
 <!-- M5: -->
 **M5 — 2026-09-27.** Docker-based local instance, path-prefixed base URLs, and the
-integration test suite. All three acceptance criteria verified with real network calls
-against the local instance the same day, not by inspection or unit test alone — a step
-up from every prior milestone's manual-only verification, made possible because this
-milestone added no new UI (CLAUDE.md's manual-smoke-test rule is specifically for UI/
-KeePass-API-touching changes; this one only proves existing client code against new
-infrastructure).
+integration test suite. All three acceptance criteria verified — the automated
+integration tests hit the local instance directly over the real network, and the user
+additionally ran a full authenticated share → reveal → burn cycle through the actual
+plugin UI against it, closing the one gap the automated suite couldn't reach (see below).
+A step up from every prior milestone's manual-only verification, made possible because
+this milestone added no new UI (CLAUDE.md's manual-smoke-test rule is specifically for
+UI/KeePass-API-touching changes; this one only proves existing client code against new
+infrastructure) — the manual check happened anyway and paid off.
 
 - **Path-prefixed base URLs already worked, since M1.** `UrlPolicy` and both clients
   already handled a path prefix correctly and already had unit coverage for it
@@ -430,13 +432,14 @@ infrastructure).
   prefix test also exercise (and be blocked by) certificate rejection, conflating two
   independent things to prove. Split across `:8443` (cert only) and `:8080/ots`
   (prefix only, plain HTTP) in `docker/Caddyfile`.
-- **`burn` was not re-verified locally.** The self-hosted OTS image has no API endpoint
-  for account creation (confirmed against the same published docs that found the
-  `continue` field in M4 — only a web-form signup exists), and burn needs an owning
-  account. Not pursued: burn's correctness is not self-hosted-specific behavior, and it
-  was already thoroughly verified against the real hosted API with real credentials in
-  M4. Anonymous share-and-reveal against the local instance is covered; burn is not,
-  and this is stated rather than implied.
+- **`burn` was not re-verified by the automated integration suite** — the self-hosted OTS
+  image has no API endpoint for account creation (confirmed against the same published
+  docs that found the `continue` field in M4 — only a web-form signup exists), so the
+  integration tests above cover anonymous share-and-reveal against the local instance
+  only. **Covered instead by the user's own manual smoke test**: signed up for an
+  account through the local instance's web UI, then ran a full authenticated
+  share → reveal → burn cycle through the actual plugin against
+  `http://localhost:3000` — confirmed working.
 - New `tests/OneTimeSecret.IntegrationTests` project, deliberately separate from the
   unit suite (never touched by `dotnet test tests/OneTimeSecret.Tests`) and additionally
   gated per-test on its own `OTS_TEST_*` environment variable, so it is harmless even if
