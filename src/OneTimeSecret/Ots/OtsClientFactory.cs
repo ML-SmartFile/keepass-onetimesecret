@@ -11,17 +11,18 @@ namespace OneTimeSecret.Ots
     public interface IApiVersionCache
     {
         /// <summary>
-        /// Returns the cached version for <paramref name="host"/>, or null if nothing is
-        /// cached, the cache is for a different host, or it is older than <paramref name="maxAge"/>.
+        /// Returns the cached version for <paramref name="cacheKey"/>, or null if nothing
+        /// is cached, the cache is for a different key, or it is older than
+        /// <paramref name="maxAge"/>.
         /// </summary>
-        string TryGetCachedVersion(string host, TimeSpan maxAge);
+        string TryGetCachedVersion(string cacheKey, TimeSpan maxAge);
 
-        void SetCachedVersion(string host, string version);
+        void SetCachedVersion(string cacheKey, string version);
     }
 
     /// <summary>
-    /// Decides v1 vs v2 for a host, per SPEC.md section 5: probe once, cache per host for
-    /// up to 7 days, never silently fall back to v1 on an unexpected status.
+    /// Decides v1 vs v2 for a base URL, per SPEC.md section 5: probe once, cache for up to
+    /// 7 days, never silently fall back to v1 on an unexpected status.
     /// </summary>
     public static class OtsClientFactory
     {
@@ -36,19 +37,34 @@ namespace OneTimeSecret.Ots
             if (baseUri == null) throw new ArgumentNullException("baseUri");
             if (transport == null) throw new ArgumentNullException("transport");
 
-            string host = baseUri.Host;
+            // Scheme + host + port + path, not just the host: two path-prefixed instances
+            // on one host, or the same host on two ports (the M5 Docker setup does both),
+            // are different servers and must not share one cached version. Found by code
+            // review - a host-only key would have conflated them.
+            string cacheKey = CacheKey(baseUri);
 
             if (cache != null)
             {
-                string cached = cache.TryGetCachedVersion(host, CacheLifetime);
+                string cached = cache.TryGetCachedVersion(cacheKey, CacheLifetime);
                 if (cached != null) return cached;
             }
 
             string detected = Probe(baseUri, transport, timeoutMs, cancellationToken);
 
-            if (cache != null) cache.SetCachedVersion(host, detected);
+            if (cache != null) cache.SetCachedVersion(cacheKey, detected);
 
             return detected;
+        }
+
+        /// <summary>
+        /// The same normalization <see cref="Detect"/> uses internally, exposed so callers
+        /// that need to write the cache themselves (the auto-fallback path, when it decides
+        /// a cached v2 was wrong) use an identical key rather than risking drift between two
+        /// separately-written normalizations.
+        /// </summary>
+        public static string CacheKey(Uri baseUri)
+        {
+            return baseUri.GetLeftPart(UriPartial.Path).TrimEnd('/');
         }
 
         private static string Probe(Uri baseUri, IHttpTransport transport, int timeoutMs,

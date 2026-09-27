@@ -4,7 +4,19 @@ A KeePass 2.x plugin that adds **"Share with OneTimeSecret…"** to the entry co
 menu, publishes selected entry data as a one-time secret via the OneTimeSecret API,
 and returns the share link to the clipboard.
 
-Status: greenfield. No existing plugin implements this (verified Sept 2026).
+Status: no longer greenfield, corrected 2026-09-27. The original claim here ("no existing
+plugin implements this, verified Sept 2026") was wrong — a comparable plugin,
+[davidsiv/KeePass-OneTimeSecretShare](https://github.com/davidsiv/KeePass-OneTimeSecretShare),
+has commits from August 2026, predating that claim. Found by an Opus subagent doing a
+feature/security comparison against it, not by re-checking the original claim itself.
+That comparison found ours ahead on features (v2 detection, burn, all four passphrase
+modes, self-hosted TLS/path-prefix handling, test coverage) and more secure overall
+(their plugin allows plain `http://` unconditionally, stores the API token in
+`KeePass.config.xml`, runs network calls on the UI thread, and binds a global `Ctrl+Z`
+shortcut that shares with no confirmation) — with one point in their favor worth taking
+seriously: their in-memory secret handling never lets the composed secret become a
+managed `string`, which ours does via `SprEngine.Compile`. See `ROADMAP.md`'s
+`code-review-fixes` progress note for the full comparison.
 
 ---
 

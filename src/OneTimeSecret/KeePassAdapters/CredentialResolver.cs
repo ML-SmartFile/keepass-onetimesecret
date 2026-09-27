@@ -44,9 +44,15 @@ namespace OneTimeSecret.KeePassAdapters
 
             PwEntry entry = database.RootGroup.FindEntry(uuid, true);
             if (entry == null)
+                // Not "no longer exists": the entry is only missing from the currently open
+                // database. A user working with more than one .kdbx would otherwise see this
+                // as a false "deleted" warning for an entry that is still sitting in a
+                // different, perfectly intact database. Found by code review.
                 return new CredentialResolution(OtsCredentials.Anonymous,
-                    "The entry configured for your OneTimeSecret credentials no longer exists. " +
-                    "Sharing anonymously instead - pick a new entry in the OneTimeSecret options.");
+                    "The entry configured for your OneTimeSecret credentials was not found in " +
+                    "this database. If it lives in a different database, open that one first; " +
+                    "otherwise pick a new entry in the OneTimeSecret options. " +
+                    "Sharing anonymously instead.");
 
             string user = EntryFieldReader.ReadResolvedField(entry, database, PwDefs.UserNameField);
             string token = EntryFieldReader.ReadResolvedField(entry, database, PwDefs.PasswordField);
@@ -71,7 +77,7 @@ namespace OneTimeSecret.KeePassAdapters
                 return "(configured, but the database is not open)";
 
             PwEntry entry = database.RootGroup.FindEntry(uuid, true);
-            if (entry == null) return "(the configured entry no longer exists)";
+            if (entry == null) return "(not found in this database - may exist in another)";
 
             string title = entry.Strings.ReadSafe(PwDefs.TitleField);
             string user = entry.Strings.ReadSafe(PwDefs.UserNameField);

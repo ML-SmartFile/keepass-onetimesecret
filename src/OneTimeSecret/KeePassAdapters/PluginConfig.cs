@@ -175,15 +175,17 @@ namespace OneTimeSecret.KeePassAdapters
         }
 
         /// <summary>
-        /// The host <see cref="DetectedVersion"/> was probed against. Capability detection
-        /// is cached per host (SPEC.md section 5); comparing this before trusting the cache
-        /// is what makes a stale detection from a previous BaseUrl harmless when the host
-        /// changes rather than silently wrong.
+        /// The normalized base URL (scheme, host, port and path prefix) <see cref="DetectedVersion"/>
+        /// was probed against. Comparing this before trusting the cache is what makes a
+        /// stale detection from a previous BaseUrl harmless when it changes, rather than
+        /// silently wrong. Keyed on the full URL, not just the host - found by code review:
+        /// two path-prefixed instances on the same host (or the same host on two ports, as
+        /// in the M5 Docker setup) would otherwise share one cache entry.
         /// </summary>
-        public string DetectedForHost
+        public string DetectedForUrl
         {
-            get { return m_config.GetString(Prefix + "DetectedForHost", string.Empty); }
-            set { m_config.SetString(Prefix + "DetectedForHost", value ?? string.Empty); }
+            get { return m_config.GetString(Prefix + "DetectedForUrl", string.Empty); }
+            set { m_config.SetString(Prefix + "DetectedForUrl", value ?? string.Empty); }
         }
 
         public DateTime? DetectedAtUtc

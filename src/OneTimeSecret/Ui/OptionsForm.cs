@@ -216,10 +216,13 @@ namespace OneTimeSecret.Ui
             {
                 Text = "Write the receipt to a protected field on the entry (enables \"Burn last share\")",
                 Checked = writeBackReceipt,
-                Bounds = new Rectangle(160, y, 424, 22)
+                AutoSize = false,
+                // 79 characters wraps to two lines at this width - a single-line-tall box
+                // clipped the second line. Found by code review, not by testing.
+                Bounds = new Rectangle(160, y, 424, 36)
             };
             Controls.Add(m_writeBackReceipt);
-            y += 30;
+            y += 44;
 
             m_passphraseMode = new ComboBox
             {

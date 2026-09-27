@@ -465,3 +465,130 @@ cosmetic issue in the process, both fixed:
 - One error seen during testing (an account-plan-limitation message on a too-long
   default TTL) was expected behaviour confirming M4's error-message fix still works
   through this new code path, not a new bug.
+
+<!-- code-review-fixes: -->
+**Code review and competitor comparison — 2026-09-27.** Before starting M6, the user
+asked for two Opus subagents: a full code review of the unmerged M4/M5/Quick Share work,
+and a feature/security comparison against a similar existing plugin,
+[davidsiv/KeePass-OneTimeSecretShare](https://github.com/davidsiv/KeePass-OneTimeSecretShare).
+Both findings are recorded here in full since between them they corrected a factual claim
+in `SPEC.md`, found two real bugs this project's own testing never would have caught
+(neither had a live account or a v1 burn to test against), and confirmed the security
+posture is sound.
+
+**Competitor comparison.** Verified their earliest commit predates `SPEC.md`'s "no
+existing plugin implements this, verified Sept 2026" line — that claim was wrong and is
+now corrected there. Full comparison:
+
+- *Their advantages*: `.plgx` packaging + `UpdateUrl` versioning (our unfinished M6),
+  region presets, saved clipboard notes, an auto-close countdown on the result window, a
+  "Test connection" button in Options, and materially better in-memory secret handling —
+  they read the password via `ProtectedString.ReadUtf8()` into a `byte[]` and zero every
+  buffer, never letting the secret become a managed `string`. Ours goes through
+  `SprEngine.Compile`, which returns an immutable `string` we cannot scrub. That is a
+  real, deliberate tradeoff (we need `SprEngine` for correct `{REF:...}` resolution,
+  which they skip entirely) rather than an oversight - and it is exactly what M6's
+  planned "limits of in-memory secret scrubbing" README section exists to state honestly
+  rather than paper over.
+- *Our advantages*: v2 detection by probing the server (theirs is a URL-substring check
+  that defaults to deprecated v1), anonymous sharing, all four passphrase modes, field
+  selection/custom message/live preview/recipient, per-share TTL, burn + receipt,
+  self-hosted path-prefix and TLS handling, KeePass proxy support, a confirmation step
+  before anything is sent, and a test suite (they have none).
+- *Security, measured against our own non-negotiables*: neither project weakens TLS. Their
+  real gaps: plain `http://` allowed to any host with no restriction (breaks our #7); the
+  API token stored in `KeePass.config.xml` (DPAPI-encrypted, but still decryptable by
+  anything running as the same Windows user, and readable while the database is locked -
+  breaks the spirit of our #5); all network calls run synchronously on the UI thread
+  (breaks our #9); a global `Ctrl+Z` shortcut shares immediately with no confirmation and
+  no host shown (breaks our SPEC §2 rule); no `SprEngine` resolution, so a `{REF:...}`
+  field sends the literal placeholder; and an unmanaged `Clipboard.SetText` with no
+  auto-clear. Verdict: we are more secure overall, and the gap is not close.
+
+**Code review**, against the diff from `main` through `backlog-quick-share`:
+
+- **Confirmed, fixed: `OtsClientV1.Burn` read the wrong JSON level.** Verified against
+  `api.onetimesecret.com`'s docs: the v1 burn response nests everything under a top-level
+  `state` object, with the actual status at `state.state` - not a bare top-level `state`
+  string as the client read it. Every real v1 burn would have reported "not confirmed"
+  even on genuine success, and nothing in this project's own testing could have caught
+  it - M5 explicitly noted the v1 burn integration test never ran, and the user's manual
+  burn went through auto-detection to v2. Fixed, with a regression test asserting the old
+  (wrong) flat shape is treated as unconfirmed rather than silently accepted.
+- **Confirmed, fixed: Options save didn't clear the stale-cache escape hatch it
+  advertises.** `OtsClientV2`'s own 404 message tells the user to "re-open the options
+  and click OK to refresh it," but nothing wired that up - the cache lasted its full
+  7 days regardless. Fixed: saving Options now clears `DetectedVersion`, so the next
+  share re-probes.
+- **Likely, fixed defensively: a 404 from Burn was permanently downgrading the host to
+  v1.** A 404 on Burn is at least as plausible a sign of "this receipt is gone" (expired,
+  already burned, wrong host) as "wrong API version," and caching v1 off that guess would
+  silently downgrade every later Share on the host for up to 7 days - the "never silently
+  fall back" invariant applied to Share, not to a burn's stale-receipt guess. Whether OTS
+  actually returns 404 for a missing receipt was not confirmed live; the fix (Burn still
+  retries once as v1, but never writes the cache) is safe either way and was applied
+  regardless of that confirmation.
+- **Confirmed, fixed: Quick Share could send an empty or literal-only secret.**
+  `TemplateFields.Any` counts the `{MESSAGE}` token, which Quick Share always forces
+  empty - a template of just `{MESSAGE}`, or a `{URL}` on an entry with no URL, passed
+  the "anything to share?" gate and composed to nothing. `ShareForm` already guards this;
+  Quick Share now does too.
+- **Confirmed, fixed: Quick Share and Burn reintroduced the lock/tab-switch risk M3 ruled
+  out for Share.** M3's "unreachable by design" reasoning was specific to `ShareForm`,
+  which is modal - Quick Share and Burn have no modal dialog open while their request is
+  in flight, so KeePass's own Lock Workspace or a tab switch is fully reachable during
+  that window. Two consequences, both fixed: the receipt write-back (and burn's field
+  removal) now capture the source `PwDatabase` at click time instead of re-reading
+  whichever database is active when the response arrives, so a tab switch mid-flight
+  cannot touch the wrong database's entry; and Quick Share now checks whether that
+  captured database is still open before showing the result (link + passphrase) or
+  copying to the clipboard, showing a safe generic notice instead of exposing them over a
+  locked workspace.
+- **Confirmed, fixed: Burn had no in-flight guard.** Quick Share already disables its own
+  menu item while a request is running (`m_quickShareInFlight`); Burn had no equivalent,
+  so double-clicking it could dispatch two concurrent burns. Added `m_burnInFlight`,
+  mirroring the existing pattern.
+- **Confirmed, fixed: an unguarded `Invoke` from the thread pool could crash the process.**
+  If KeePass is closing when a Quick Share or Burn response arrives, calling `Invoke` on
+  a disposed window throws on the thread-pool thread - an unhandled exception under .NET
+  Framework, which takes the whole process down. `ShareForm` already guards its own
+  callback this way (`IsDisposed`/`IsHandleCreated` plus try/catch); the same `SafeInvoke`
+  pattern now covers Quick Share and Burn too.
+- **Confirmed, fixed: the version cache was keyed by host only.** Two path-prefixed
+  instances on one host, or the same host on two ports - the exact shape of M5's own
+  Docker setup (`localhost:3000` vs `localhost:8080/ots`) - would have shared one cache
+  entry. Now keyed on the full normalized base URL (`OtsClientFactory.CacheKey`);
+  `PluginConfig.DetectedForHost` renamed to `DetectedForUrl` to match what it actually
+  stores.
+- **Fixed, low cost: the "entry no longer exists" warnings were misleading across
+  multiple databases.** A `PwUuid` configured while database A was open reads as
+  "deleted" when database B is active, even though the entry is intact in A. Reworded in
+  `CredentialResolver`/`PassphraseResolver` to say the entry was not found *in this
+  database* and suggest opening the right one - the honest, cheap fix. The user's
+  broader concern (global `CustomConfig` doesn't know which database a credential
+  reference belongs to) is real but architectural - storing the reference in the
+  database's own `PwDatabase.CustomData` instead would fix it properly. **Deliberately
+  not attempted in this pass**: it changes where credentials are stored for every
+  existing config value, and deserves its own dedicated design discussion rather than
+  being folded into a review-fix batch. Left as a backlog candidate.
+- **Considered, not fixed: `CustomConfig` is written from a background thread during
+  capability detection.** `AceCustomConfig` is a plain dictionary with no documented
+  thread-safety guarantee, and a share's detection probe can race a simultaneous Options
+  save. The reviewer's opinion was to fix it (defer the write into the `Invoke`
+  callback); this project's judgement is that the practical risk is small enough (this
+  is the only background config write in the codebase, and the race window is narrow)
+  that restructuring the client-factory/cache interface to defer every write to the UI
+  thread is not worth doing under the same time pressure as the rest of this batch.
+  Recorded here as a deliberately accepted risk, not a silently dropped finding.
+- **Not confirmed either way**: whether `Uri.AllowAutoRedirect = false` fully prevents an
+  `Authorization` header from following a redirect on .NET Framework was flagged by the
+  reviewer as unverified from memory. `AllowAutoRedirect` is already `false` on every
+  request this plugin makes, so there is no redirect to follow in the first place -
+  recorded as a non-issue for this codebase specifically, not because the underlying
+  question was resolved.
+- Minor wording fix: the anonymous-fallback confirmation always said "Share anonymously
+  anyway?", including when triggered from Burn. `ConfirmAnonymousFallback` now takes the
+  verb, so Burn says "Burn anonymously anyway?" instead.
+- Minor layout fix: the new `m_writeBackReceipt` checkbox (79 characters) was sized for
+  one line and would have clipped its second line - the same class of bug as M4's
+  `AutoSize` findings, just on a `CheckBox` rather than a `Label` this time.

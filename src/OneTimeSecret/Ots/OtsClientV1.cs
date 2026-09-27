@@ -247,11 +247,15 @@ namespace OneTimeSecret.Ots
                     "The server returned a response this plugin could not read. " + ex.Message, 200, null, ex);
             }
 
-            // v1's burn response is a flat object like its share response (see
-            // Share_ReadsARealWorldV1Payload), carrying the record's current "state" rather
-            // than a v2-style "success" flag - per the docs, a successful burn transitions
-            // state to "burned".
-            string state = Json.GetStringOrNull(obj, "state");
+            // Verified against api.onetimesecret.com's published docs: unlike v1's share
+            // response, the burn response nests everything under a top-level "state" object,
+            // with the actual status string at state.state - not a bare top-level "state"
+            // field. An earlier version of this method read the wrong level and would have
+            // read every burn as unconfirmed even on real success, since a top-level object
+            // is not a string. Caught by code review before this was ever tested against a
+            // live v1 burn.
+            Dictionary<string, object> stateObj = Json.GetObjectOrNull(obj, "state");
+            string state = (stateObj != null) ? Json.GetStringOrNull(stateObj, "state") : null;
             bool burned = string.Equals(state, "burned", StringComparison.OrdinalIgnoreCase);
 
             string detail = burned
