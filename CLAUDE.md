@@ -69,7 +69,8 @@ To debug: start KeePass, then attach the debugger to `KeePass.exe`.
 - Pass entry field values through `SprEngine.Compile` with a proper `SprContext`.
   A raw `Strings.ReadSafe` will hand OneTimeSecret an unresolved `{REF:…}` string.
 - Wrap custom forms in `GlobalWindowManager.AddWindow` / `RemoveWindow` in `try/finally`.
-- Use `ClipboardUtil.Copy`, never `Clipboard.SetText`.
+- Use `ClipboardUtil.Copy`, never `Clipboard.SetText` — and follow it with
+  `MainWindow.StartClipboardCountdown()`, or the value never auto-clears. See `SPEC.md` §4.
 - Materialize every value needed for a request **before** dispatching it — the database
   can lock mid-flight.
 - JSON readers ignore unknown fields and fail loudly on missing expected ones.

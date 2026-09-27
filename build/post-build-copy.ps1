@@ -19,5 +19,11 @@ if (-not (Test-Path -LiteralPath $KeePassPluginsDir)) {
     throw "KeePass Plugins folder not found at $KeePassPluginsDir - check `$KeePassPluginsDir above."
 }
 
-Copy-Item -LiteralPath $BuiltDll -Destination $KeePassPluginsDir -Force
+try {
+    Copy-Item -LiteralPath $BuiltDll -Destination $KeePassPluginsDir -Force -ErrorAction Stop
+}
+catch [System.IO.IOException] {
+    throw "Could not replace OneTimeSecret.dll - KeePass is running and has the plugin loaded. Close KeePass and run this again."
+}
+
 Write-Output "Copied OneTimeSecret.dll to $KeePassPluginsDir. Restart KeePass to pick it up."

@@ -87,6 +87,23 @@ one's acceptance criteria are met and manually verified in a running KeePass.
 - Full error mapping per `SPEC.md` §8
 - TLS 1.2/1.3 forced at init; KeePass proxy settings respected
 
+> **Partly landed early, in M1.** Recorded here so "M3 done" keeps its meaning and a future
+> session is not misled about what was actually verified when:
+>
+> - **`ResultForm` exists** (`Ui/ResultForm.cs`) showing the share link and the receipt link
+>   as selectable read-only boxes with a Copy button each. Built in M1 because the clipboard
+>   auto-clear could otherwise lose the only copy of a link while the secret stayed live and
+>   unburnable. **M3 still owes:** the passphrase row and its separate copy button, and
+>   **making the clipboard-clear warning far more prominent** — it is currently a small grey
+>   line under the receipt box that is easy to miss, and missing it is precisely how a user
+>   loses the only copy of a live link.
+> - **TLS 1.2/1.3 is already forced at init** via `HttpTransport.EnableModernTls()`.
+> - **Most of the §8 error mapping is already in `OtsClientV1`** (401/403, 429, 400/422 with
+>   the `ttl` hint, timeout, DNS, TLS). **M3 still owes:** surfacing these through the new
+>   dialogs, and the cancellation path.
+> - **Not done, despite the bullet above: KeePass proxy settings are not read.**
+>   `HttpTransport` uses the system default proxy only.
+
 **Acceptance:**
 - Every error row in §8 is reachable and produces a comprehensible message —
   test at minimum: bad credentials, no network, and an over-long anonymous TTL
@@ -186,3 +203,31 @@ Surprises worth carrying forward:
   under Windows PowerShell 5.1 (BOM-less files are read via the system codepage).
 - `KeePassDir` is an overridable MSBuild property (defaults to `C:\KeePass`), so the build
   is not pinned to this machine.
+
+<!-- M1: -->
+**M1 — 2026-09-23.** Done, all acceptance criteria smoke-tested against the live
+`eu.onetimesecret.com` by the user: share, reveal-once-then-burn, `{REF:P@I:…}` resolving
+to the real password, umlauts surviving the round trip, and a responsive UI.
+
+- **`ClipboardUtil.Copy` does not arm the auto-clear timer.** The countdown belongs to
+  `MainForm.StartClipboardCountdown()`, which KeePass's own copy handlers call immediately
+  after copying. Without it the share link sits on the clipboard forever. Found only by the
+  manual smoke test — no compiler or unit test would have caught it. `SPEC.md` §4 said the
+  opposite and has been corrected.
+- **The anonymous TTL cap was not a problem.** We expected 86400 might be rejected for
+  anonymous shares; the hosted service accepted it. The 400/422 `field == "ttl"` handling
+  is in place regardless.
+- **`SecretComposer` cannot call `SprEngine`** (non-negotiable #3). Split adopted: the
+  adapter resolves each *field value* through `SprEngine`, then `Core/SecretComposer` does a
+  single-pass `{FIELD}` substitution over those resolved values. Substituted content is
+  never rescanned, so a password that literally reads `{TITLE}` survives verbatim — passing
+  the whole template to `SprEngine` would have double-expanded it.
+- **`SprCompileFlags.NonActive`, not `All`.** Still dereferences `{REF:…}`, but excludes
+  `{CMD:}` execution, the character-picker prompt, and the state-changing `NewPassword` /
+  `HmacOtp` placeholders. Composing a secret must not run anything or burn an OTP counter.
+- **The test project link-compiles `Core/` and `Ots/`** instead of referencing the plugin
+  assembly. The suite therefore builds and runs with no KeePass present, and a `using
+  KeePass…` added to either folder breaks the test build immediately — the build-time check
+  `SPEC.md` §3 calls welcome.
+- `IOtsClient` is synchronous (`Share`, not `ShareAsync`) and runs on a thread-pool thread.
+  Async plumbing waits for M3, where cancellation actually lands.
