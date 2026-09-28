@@ -20,6 +20,28 @@ namespace OneTimeSecret.Ui
     }
 
     /// <summary>
+    /// A fallback entry reference, in and out of the dialog. On the way in, StatusText is
+    /// the rendered read-only line (may say "not currently open" - a live check the caller
+    /// already did); on the way out it is unused. An empty DatabaseUuidHex means no
+    /// fallback is configured.
+    /// </summary>
+    internal sealed class FallbackState
+    {
+        public FallbackState(string databaseUuidHex, string entryUuidHex, string display, string statusText)
+        {
+            DatabaseUuidHex = databaseUuidHex ?? string.Empty;
+            EntryUuidHex = entryUuidHex ?? string.Empty;
+            Display = display ?? string.Empty;
+            StatusText = statusText ?? "(none)";
+        }
+
+        public string DatabaseUuidHex { get; private set; }
+        public string EntryUuidHex { get; private set; }
+        public string Display { get; private set; }
+        public string StatusText { get; private set; }
+    }
+
+    /// <summary>
     /// The global settings dialog. KeePass-free: the caller injects the entry picker and
     /// maps these properties to and from CustomConfig.
     /// </summary>
@@ -39,15 +61,26 @@ namespace OneTimeSecret.Ui
         private readonly CheckBox m_writeBackReceipt;
         private readonly ComboBox m_passphraseMode;
         private readonly TextBox m_credentialDisplay;
+        private readonly TextBox m_credentialFallbackStatus;
+        private readonly Button m_credentialFallbackSet, m_credentialFallbackClear;
         private readonly Label m_passphraseEntryLabel, m_passphraseEntryHint;
         private readonly TextBox m_passphraseEntryDisplay;
         private readonly Button m_passphraseEntrySelect, m_passphraseEntryClear;
+        private readonly Label m_passphraseFallbackLabel;
+        private readonly TextBox m_passphraseFallbackStatus;
+        private readonly Button m_passphraseFallbackSet, m_passphraseFallbackClear;
         private readonly Button m_ok, m_cancel;
         private readonly int m_passphraseEntryTop;
         private readonly int m_contentBottomWithEntry, m_contentBottomWithoutEntry;
 
         private string m_credentialUuidHex;
         private string m_passphraseEntryUuidHex;
+        private string m_credentialFallbackDatabaseUuidHex, m_credentialFallbackEntryUuidHex, m_credentialFallbackDisplay;
+        private string m_passphraseFallbackDatabaseUuidHex, m_passphraseFallbackEntryUuidHex, m_passphraseFallbackDisplay;
+
+        private readonly bool m_activeDatabaseOpen;
+        private readonly string m_activeDatabaseUuidHex;
+        private readonly string m_activeDatabaseDisplayName;
 
         /// <summary>Wraps a mode so the combo shows a readable label.</summary>
         private sealed class ModeItem
@@ -69,12 +102,28 @@ namespace OneTimeSecret.Ui
             string credentialDisplay,
             string passphraseEntryUuidHex,
             string passphraseEntryDisplay,
+            FallbackState credentialFallback,
+            FallbackState passphraseFallback,
+            bool activeDatabaseOpen,
+            string activeDatabaseUuidHex,
+            string activeDatabaseDisplayName,
             Func<IWin32Window, CredentialSelection> pickEntry)
         {
             if (pickEntry == null) throw new ArgumentNullException("pickEntry");
+            if (credentialFallback == null) throw new ArgumentNullException("credentialFallback");
+            if (passphraseFallback == null) throw new ArgumentNullException("passphraseFallback");
             m_pickEntry = pickEntry;
             m_credentialUuidHex = credentialUuidHex ?? string.Empty;
             m_passphraseEntryUuidHex = passphraseEntryUuidHex ?? string.Empty;
+            m_credentialFallbackDatabaseUuidHex = credentialFallback.DatabaseUuidHex;
+            m_credentialFallbackEntryUuidHex = credentialFallback.EntryUuidHex;
+            m_credentialFallbackDisplay = credentialFallback.Display;
+            m_passphraseFallbackDatabaseUuidHex = passphraseFallback.DatabaseUuidHex;
+            m_passphraseFallbackEntryUuidHex = passphraseFallback.EntryUuidHex;
+            m_passphraseFallbackDisplay = passphraseFallback.Display;
+            m_activeDatabaseOpen = activeDatabaseOpen;
+            m_activeDatabaseUuidHex = activeDatabaseUuidHex ?? string.Empty;
+            m_activeDatabaseDisplayName = activeDatabaseDisplayName ?? string.Empty;
 
             Text = "OneTimeSecret Options";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -159,15 +208,37 @@ namespace OneTimeSecret.Ui
             Controls.Add(clear);
             y += 28;
 
+            Controls.Add(Label("Fallback:", y));
+            m_credentialFallbackStatus = new TextBox
+            {
+                Text = credentialFallback.StatusText,
+                ReadOnly = true,
+                BackColor = SystemColors.Control,
+                Bounds = new Rectangle(160, y - 3, 250, 23)
+            };
+            Controls.Add(m_credentialFallbackStatus);
+
+            m_credentialFallbackSet = new Button { Text = "Use This Entry", Bounds = new Rectangle(418, y - 4, 80, 25) };
+            m_credentialFallbackSet.Click += OnSetCredentialFallback;
+            Controls.Add(m_credentialFallbackSet);
+
+            m_credentialFallbackClear = new Button { Text = "Clear", Bounds = new Rectangle(504, y - 4, 80, 25) };
+            m_credentialFallbackClear.Click += OnClearCredentialFallback;
+            Controls.Add(m_credentialFallbackClear);
+            y += 28;
+
             Controls.Add(new Label
             {
                 Text = "The API token is never written to KeePass.config.xml - only a reference to " +
-                       "the entry is stored, and the token is read at the moment of sharing.",
+                       "the entry is stored, and the token is read at the moment of sharing. " +
+                       "\"Fallback\" lets other open databases with no credential entry of their own " +
+                       "borrow this one, but only while this database is open too - nothing about it " +
+                       "is ever written into another database's file.",
                 ForeColor = SystemColors.GrayText,
                 AutoSize = false,
-                Bounds = new Rectangle(160, y, 424, 32)
+                Bounds = new Rectangle(160, y, 424, 56)
             });
-            y += 42;
+            y += 66;
 
             Controls.Add(Header("Share defaults", y)); y += 26;
 
@@ -261,6 +332,27 @@ namespace OneTimeSecret.Ui
             Controls.Add(m_passphraseEntryClear);
             y += 28;
 
+            m_passphraseFallbackLabel = Label("Fallback:", y);
+            Controls.Add(m_passphraseFallbackLabel);
+
+            m_passphraseFallbackStatus = new TextBox
+            {
+                Text = passphraseFallback.StatusText,
+                ReadOnly = true,
+                BackColor = SystemColors.Control,
+                Bounds = new Rectangle(160, y - 3, 250, 23)
+            };
+            Controls.Add(m_passphraseFallbackStatus);
+
+            m_passphraseFallbackSet = new Button { Text = "Use This Entry", Bounds = new Rectangle(418, y - 4, 80, 25) };
+            m_passphraseFallbackSet.Click += OnSetPassphraseFallback;
+            Controls.Add(m_passphraseFallbackSet);
+
+            m_passphraseFallbackClear = new Button { Text = "Clear", Bounds = new Rectangle(504, y - 4, 80, 25) };
+            m_passphraseFallbackClear.Click += OnClearPassphraseFallback;
+            Controls.Add(m_passphraseFallbackClear);
+            y += 28;
+
             m_passphraseEntryHint = new Label
             {
                 Text = "Read from that entry's Password field at share time. Reusing one passphrase " +
@@ -318,6 +410,8 @@ namespace OneTimeSecret.Ui
         public PassphraseMode ResultPassphraseMode { get; private set; }
         public string ResultCredentialUuidHex { get; private set; }
         public string ResultPassphraseEntryUuidHex { get; private set; }
+        public FallbackState ResultCredentialFallback { get; private set; }
+        public FallbackState ResultPassphraseFallback { get; private set; }
 
         private void UpdatePassphraseEntryVisibility()
         {
@@ -328,6 +422,10 @@ namespace OneTimeSecret.Ui
             m_passphraseEntryDisplay.Visible = show;
             m_passphraseEntrySelect.Visible = show;
             m_passphraseEntryClear.Visible = show;
+            m_passphraseFallbackLabel.Visible = show;
+            m_passphraseFallbackStatus.Visible = show;
+            m_passphraseFallbackSet.Visible = show;
+            m_passphraseFallbackClear.Visible = show;
             m_passphraseEntryHint.Visible = show;
 
             LayOutTail(show);
@@ -346,6 +444,58 @@ namespace OneTimeSecret.Ui
         {
             m_passphraseEntryUuidHex = string.Empty;
             m_passphraseEntryDisplay.Text = "(none selected)";
+        }
+
+        private void OnSetCredentialFallback(object sender, EventArgs e)
+        {
+            if (!m_activeDatabaseOpen || string.IsNullOrEmpty(m_credentialUuidHex))
+            {
+                Complain("Select this database's own credential entry first - the fallback " +
+                    "is that entry, made available to other open databases with none of " +
+                    "their own.");
+                return;
+            }
+
+            m_credentialFallbackDatabaseUuidHex = m_activeDatabaseUuidHex;
+            m_credentialFallbackEntryUuidHex = m_credentialUuidHex;
+            m_credentialFallbackDisplay = string.IsNullOrEmpty(m_activeDatabaseDisplayName)
+                ? m_credentialDisplay.Text
+                : m_activeDatabaseDisplayName + "  -  " + m_credentialDisplay.Text;
+            m_credentialFallbackStatus.Text = m_credentialFallbackDisplay;
+        }
+
+        private void OnClearCredentialFallback(object sender, EventArgs e)
+        {
+            m_credentialFallbackDatabaseUuidHex = string.Empty;
+            m_credentialFallbackEntryUuidHex = string.Empty;
+            m_credentialFallbackDisplay = string.Empty;
+            m_credentialFallbackStatus.Text = "(none)";
+        }
+
+        private void OnSetPassphraseFallback(object sender, EventArgs e)
+        {
+            if (!m_activeDatabaseOpen || string.IsNullOrEmpty(m_passphraseEntryUuidHex))
+            {
+                Complain("Select this database's own passphrase entry first - the fallback " +
+                    "is that entry, made available to other open databases with none of " +
+                    "their own.");
+                return;
+            }
+
+            m_passphraseFallbackDatabaseUuidHex = m_activeDatabaseUuidHex;
+            m_passphraseFallbackEntryUuidHex = m_passphraseEntryUuidHex;
+            m_passphraseFallbackDisplay = string.IsNullOrEmpty(m_activeDatabaseDisplayName)
+                ? m_passphraseEntryDisplay.Text
+                : m_activeDatabaseDisplayName + "  -  " + m_passphraseEntryDisplay.Text;
+            m_passphraseFallbackStatus.Text = m_passphraseFallbackDisplay;
+        }
+
+        private void OnClearPassphraseFallback(object sender, EventArgs e)
+        {
+            m_passphraseFallbackDatabaseUuidHex = string.Empty;
+            m_passphraseFallbackEntryUuidHex = string.Empty;
+            m_passphraseFallbackDisplay = string.Empty;
+            m_passphraseFallbackStatus.Text = "(none)";
         }
 
         private void SelectPassphraseMode(PassphraseMode mode)
@@ -489,6 +639,10 @@ namespace OneTimeSecret.Ui
 
             ResultCredentialUuidHex = m_credentialUuidHex;
             ResultPassphraseEntryUuidHex = m_passphraseEntryUuidHex;
+            ResultCredentialFallback = new FallbackState(
+                m_credentialFallbackDatabaseUuidHex, m_credentialFallbackEntryUuidHex, m_credentialFallbackDisplay, null);
+            ResultPassphraseFallback = new FallbackState(
+                m_passphraseFallbackDatabaseUuidHex, m_passphraseFallbackEntryUuidHex, m_passphraseFallbackDisplay, null);
 
             DialogResult = DialogResult.OK;
             Close();
