@@ -101,8 +101,13 @@ namespace OneTimeSecret.Ots
         /// <summary>
         /// Burns a previously-shared secret by its receipt key. Both v1 and v2 support this
         /// (v1's is deprecated but present) - see SPEC.md section 5.
+        ///
+        /// <paramref name="passphrase"/> may be null/empty: the burn endpoint's own
+        /// description text says it requires the passphrase when one was set, so the caller
+        /// supplies the exact one that share used (stored alongside the receipt itself, in
+        /// the KeePassAdapters layer, and cleared together with it).
         /// </summary>
-        BurnResult Burn(string receiptKey, CancellationToken cancellationToken);
+        BurnResult Burn(string receiptKey, string passphrase, CancellationToken cancellationToken);
     }
 
     /// <summary>

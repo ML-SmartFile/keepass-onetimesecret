@@ -215,18 +215,24 @@ namespace OneTimeSecret.Ots
         /// as v2's three burn variants. An earlier version of this client assumed burning
         /// was v2-only; that assumption was never verified and was wrong.
         /// </summary>
-        public BurnResult Burn(string receiptKey, CancellationToken cancellationToken)
+        public BurnResult Burn(string receiptKey, string passphrase, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(receiptKey)) throw new ArgumentException("receiptKey is required.", "receiptKey");
 
             var endpoint = new Uri(m_baseUri.AbsoluteUri.TrimEnd('/') +
                 "/api/v1/private/" + Uri.EscapeDataString(receiptKey) + "/burn");
 
+            var body = new StringBuilder("continue=true");
+            // See OtsClientV2.Burn for why this is here: the burn endpoint's own description
+            // text says it requires the passphrase when one was set, confirmed by testing.
+            if (!string.IsNullOrEmpty(passphrase))
+                body.Append("&passphrase=").Append(Uri.EscapeDataString(passphrase));
+
             HttpResult response;
             try
             {
                 response = m_transport.Post(
-                    endpoint, "application/x-www-form-urlencoded", Encoding.UTF8.GetBytes("continue=true"),
+                    endpoint, "application/x-www-form-urlencoded", Encoding.UTF8.GetBytes(body.ToString()),
                     BasicAuth.Header(m_credentials), m_timeoutMs, cancellationToken);
             }
             catch (HttpTransportException ex)

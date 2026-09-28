@@ -114,6 +114,7 @@ namespace OneTimeSecret
             if (entry == null) return;
 
             var config = new PluginConfig(m_host.CustomConfig);
+            List<PwDatabase> openDatabases = GetOpenDatabases(mainWindow);
 
             Dictionary<string, string> fields;
             Uri baseUri;
@@ -125,7 +126,7 @@ namespace OneTimeSecret
                 fields = EntryFieldReader.ReadResolvedFields(entry, m_host.Database);
                 baseUri = UrlPolicy.Validate(config.BaseUrl, config.AllowInsecureHttp);
 
-                CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database);
+                CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database, openDatabases);
                 if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning, "Share"))
                     return;
 
@@ -156,7 +157,7 @@ namespace OneTimeSecret
                 MessageAfterFields = TemplateBuilder.MessageFollowsFields(config.Template),
             };
 
-            PassphraseResolution storedPassphrase = PassphraseResolver.Resolve(config, m_host.Database);
+            PassphraseResolution storedPassphrase = PassphraseResolver.Resolve(config, m_host.Database, openDatabases);
 
             using (var form = new ShareForm(
                 fields,
@@ -200,7 +201,8 @@ namespace OneTimeSecret
 
                 if (answer != DialogResult.OK || form.Result == null) return;
 
-                if (config.WriteBackReceipt) WriteBackReceipt(mainWindow, m_host.Database, entry, form.Result);
+                if (config.WriteBackReceipt)
+                    WriteBackReceipt(mainWindow, m_host.Database, entry, form.Result, form.PassphraseUsed);
 
                 OnShareSucceeded(mainWindow, form.Result, form.PassphraseUsed, entry);
             }
@@ -211,14 +213,15 @@ namespace OneTimeSecret
         /// database locked between dispatch and here) must not turn a successful share into
         /// an error dialog. The user already has the link either way.
         /// </summary>
-        private void WriteBackReceipt(MainForm mainWindow, PwDatabase database, PwEntry entry, ShareResult result)
+        private void WriteBackReceipt(
+            MainForm mainWindow, PwDatabase database, PwEntry entry, ShareResult result, string passphrase)
         {
             if (database == null || !database.IsOpen) return;
 
             PwEntry current = database.RootGroup.FindEntry(entry.Uuid, true);
             if (current == null) return;
 
-            ReceiptWriter.Write(current, result.MetadataKey, DateTime.UtcNow);
+            ReceiptWriter.Write(current, result.MetadataKey, DateTime.UtcNow, passphrase);
             mainWindow.UpdateUI(false, null, false, null, true, null, true);
         }
 
@@ -269,6 +272,7 @@ namespace OneTimeSecret
             PwDatabase sourceDatabase = m_host.Database;
 
             var config = new PluginConfig(m_host.CustomConfig);
+            List<PwDatabase> openDatabases = GetOpenDatabases(mainWindow);
 
             Dictionary<string, string> fields;
             Uri baseUri;
@@ -278,7 +282,7 @@ namespace OneTimeSecret
                 fields = EntryFieldReader.ReadResolvedFields(entry, m_host.Database);
                 baseUri = UrlPolicy.Validate(config.BaseUrl, config.AllowInsecureHttp);
 
-                CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database);
+                CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database, openDatabases);
                 if (resolution.Warning != null && !ConfirmAnonymousFallback(mainWindow, resolution.Warning, "Share"))
                     return;
 
@@ -345,7 +349,7 @@ namespace OneTimeSecret
             }
             else if (mode == PassphraseMode.Entry)
             {
-                PassphraseResolution stored = PassphraseResolver.Resolve(config, m_host.Database);
+                PassphraseResolution stored = PassphraseResolver.Resolve(config, m_host.Database, openDatabases);
                 if (stored.Warning != null)
                 {
                     ShowError(mainWindow, stored.Warning);
@@ -397,7 +401,7 @@ namespace OneTimeSecret
                     bool sourceStillOpen = sourceDatabase != null && sourceDatabase.IsOpen;
 
                     if (config.WriteBackReceipt && sourceStillOpen)
-                        WriteBackReceipt(mainWindow, sourceDatabase, entry, result);
+                        WriteBackReceipt(mainWindow, sourceDatabase, entry, result, passphrase);
 
                     if (!sourceStillOpen)
                     {
@@ -436,9 +440,37 @@ namespace OneTimeSecret
             MainForm mainWindow = (m_host != null) ? m_host.MainWindow : null;
             if (mainWindow == null) return;
 
+            // Captured once for the whole call: Options is modal and GlobalWindowManager-
+            // registered, so - same reasoning already established for ShareForm in M3 -
+            // the active database cannot change while it is open.
+            PwDatabase database = m_host.Database;
+            bool databaseOpen = database != null && database.IsOpen;
+            List<PwDatabase> openDatabases = GetOpenDatabases(mainWindow);
+
             var config = new PluginConfig(m_host.CustomConfig);
-            PwUuid configured = config.CredentialEntryUuid;
-            PwUuid passphraseEntry = config.PassphraseEntryUuid;
+
+            if (databaseOpen) MigrateLegacyReferences(mainWindow, config, database);
+
+            string credentialUuidHex = databaseOpen ? UuidHex(DatabaseScopedConfig.GetCredentialEntryUuid(database)) : string.Empty;
+            string passphraseUuidHex = databaseOpen ? UuidHex(DatabaseScopedConfig.GetPassphraseEntryUuid(database)) : string.Empty;
+
+            FallbackReference credentialFallback = config.CredentialFallback;
+            FallbackReference passphraseFallback = config.PassphraseFallback;
+
+            var credentialFallbackState = new FallbackState(
+                credentialFallback != null ? UuidHex(credentialFallback.DatabaseUuid) : string.Empty,
+                credentialFallback != null ? UuidHex(credentialFallback.EntryUuid) : string.Empty,
+                credentialFallback != null ? credentialFallback.Display : string.Empty,
+                CredentialResolver.DescribeFallback(config, openDatabases));
+
+            var passphraseFallbackState = new FallbackState(
+                passphraseFallback != null ? UuidHex(passphraseFallback.DatabaseUuid) : string.Empty,
+                passphraseFallback != null ? UuidHex(passphraseFallback.EntryUuid) : string.Empty,
+                passphraseFallback != null ? passphraseFallback.Display : string.Empty,
+                PassphraseResolver.DescribeFallback(config, openDatabases));
+
+            string activeDatabaseUuidHex = databaseOpen ? database.RootGroup.Uuid.ToHexString() : string.Empty;
+            string activeDatabaseDisplayName = databaseOpen ? DatabaseDisplayName(database) : string.Empty;
 
             // Qualified: KeePass.Forms has its own OptionsForm, so the bare name is ambiguous.
             using (var form = new Ui.OptionsForm(
@@ -449,10 +481,15 @@ namespace OneTimeSecret
                 config.AllowInsecureHttp,
                 config.WriteBackReceipt,
                 config.PassphraseMode,
-                configured.Equals(PwUuid.Zero) ? string.Empty : configured.ToHexString(),
-                CredentialResolver.Describe(config, m_host.Database),
-                passphraseEntry.Equals(PwUuid.Zero) ? string.Empty : passphraseEntry.ToHexString(),
-                PassphraseResolver.Describe(config, m_host.Database),
+                credentialUuidHex,
+                CredentialResolver.Describe(config, database),
+                passphraseUuidHex,
+                PassphraseResolver.Describe(config, database),
+                credentialFallbackState,
+                passphraseFallbackState,
+                databaseOpen,
+                activeDatabaseUuidHex,
+                activeDatabaseDisplayName,
                 delegate(IWin32Window owner) { return PickCredentialEntry(mainWindow, owner); }))
             {
                 GlobalWindowManager.AddWindow(form);
@@ -472,8 +509,30 @@ namespace OneTimeSecret
                 config.AllowInsecureHttp = form.ResultAllowInsecureHttp;
                 config.WriteBackReceipt = form.ResultWriteBackReceipt;
                 config.PassphraseMode = form.ResultPassphraseMode;
-                config.CredentialEntryUuid = ParseUuid(form.ResultCredentialUuidHex);
-                config.PassphraseEntryUuid = ParseUuid(form.ResultPassphraseEntryUuidHex);
+
+                // The per-database primary reference lives in the database's own CustomData
+                // (SPEC.md section 6) - only written, and the database only marked modified,
+                // when it actually changed, so an Options save that touches nothing but a
+                // global setting does not spuriously prompt "save changes?" on exit.
+                if (databaseOpen)
+                {
+                    PwUuid newCredentialUuid = ParseUuid(form.ResultCredentialUuidHex);
+                    PwUuid newPassphraseUuid = ParseUuid(form.ResultPassphraseEntryUuidHex);
+
+                    bool credentialChanged = !newCredentialUuid.Equals(DatabaseScopedConfig.GetCredentialEntryUuid(database));
+                    bool passphraseChanged = !newPassphraseUuid.Equals(DatabaseScopedConfig.GetPassphraseEntryUuid(database));
+
+                    if (credentialChanged) DatabaseScopedConfig.SetCredentialEntryUuid(database, newCredentialUuid);
+                    if (passphraseChanged) DatabaseScopedConfig.SetPassphraseEntryUuid(database, newPassphraseUuid);
+
+                    if (credentialChanged || passphraseChanged)
+                        mainWindow.UpdateUI(false, null, false, null, true, null, true);
+                }
+
+                // The fallback pointer is global and local-only - saves instantly, like every
+                // other setting in this dialog, no database-modified flag involved.
+                config.CredentialFallback = ToFallbackReference(form.ResultCredentialFallback);
+                config.PassphraseFallback = ToFallbackReference(form.ResultPassphraseFallback);
 
                 // SPEC.md section 5: re-probe capability "when the user hits Save in the
                 // options dialog". OtsClientV2's own 404 message tells the user to do
@@ -482,6 +541,103 @@ namespace OneTimeSecret
                 // of a network call; the next share picks it up lazily.
                 config.DetectedVersion = string.Empty;
             }
+        }
+
+        /// <summary>
+        /// One-time per database: copies the pre-M6 global credential/passphrase reference
+        /// into this database's own CustomData, so an existing single-database install keeps
+        /// working after upgrading with no re-selection needed. Also promotes it to the
+        /// global fallback, if none is configured yet, so a second database opened later
+        /// inherits it automatically - a pre-existing single-database user's one working
+        /// setup should keep working everywhere without extra clicks.
+        /// </summary>
+        private static void MigrateLegacyReferences(MainForm mainWindow, PluginConfig config, PwDatabase database)
+        {
+            if (!DatabaseScopedConfig.NeedsMigration(database)) return;
+
+            // The legacy global value has no idea which database it was configured
+            // against either - that was the whole bug M6 fixed. Blindly copying it into
+            // every database's own storage the first time Options opens there would just
+            // reintroduce the same cross-database confusion one level down (confirmed by
+            // testing: it showed up as a false "no longer exists in this database" on a
+            // second database that never had this entry to begin with). Only apply it to
+            // whichever database actually contains the referenced entry.
+            bool changed = false;
+
+            PwUuid legacyCredential = config.LegacyCredentialEntryUuid;
+            if (!legacyCredential.Equals(PwUuid.Zero) &&
+                database.RootGroup.FindEntry(legacyCredential, true) != null)
+            {
+                DatabaseScopedConfig.SetCredentialEntryUuid(database, legacyCredential);
+                changed = true;
+                if (config.CredentialFallback == null)
+                    config.CredentialFallback = new FallbackReference
+                    {
+                        DatabaseUuid = database.RootGroup.Uuid,
+                        EntryUuid = legacyCredential,
+                        Display = DatabaseDisplayName(database),
+                    };
+            }
+
+            PwUuid legacyPassphrase = config.LegacyPassphraseEntryUuid;
+            if (!legacyPassphrase.Equals(PwUuid.Zero) &&
+                database.RootGroup.FindEntry(legacyPassphrase, true) != null)
+            {
+                DatabaseScopedConfig.SetPassphraseEntryUuid(database, legacyPassphrase);
+                changed = true;
+                if (config.PassphraseFallback == null)
+                    config.PassphraseFallback = new FallbackReference
+                    {
+                        DatabaseUuid = database.RootGroup.Uuid,
+                        EntryUuid = legacyPassphrase,
+                        Display = DatabaseDisplayName(database),
+                    };
+            }
+
+            DatabaseScopedConfig.MarkMigrated(database);
+            // Only mark the database modified (prompting a save) when something was
+            // actually written for the user's benefit - not merely for the in-memory
+            // migration marker, which is harmless to recheck again next time if the
+            // database happens to close without being saved for any other reason.
+            if (changed) mainWindow.UpdateUI(false, null, false, null, true, null, true);
+        }
+
+        private static FallbackReference ToFallbackReference(FallbackState state)
+        {
+            if (state == null || string.IsNullOrEmpty(state.DatabaseUuidHex)) return null;
+            return new FallbackReference
+            {
+                DatabaseUuid = ParseUuid(state.DatabaseUuidHex),
+                EntryUuid = ParseUuid(state.EntryUuidHex),
+                Display = state.Display,
+            };
+        }
+
+        private static string UuidHex(PwUuid uuid)
+        {
+            return (uuid == null || uuid.Equals(PwUuid.Zero)) ? string.Empty : uuid.ToHexString();
+        }
+
+        private static string DatabaseDisplayName(PwDatabase database)
+        {
+            string path = (database.IOConnectionInfo != null) ? database.IOConnectionInfo.Path : null;
+            return string.IsNullOrEmpty(path) ? "(this database)" : System.IO.Path.GetFileName(path);
+        }
+
+        /// <summary>
+        /// All databases currently open in any tab, not just the active one - how the
+        /// fallback credential/passphrase lookup finds a database that is not the one the
+        /// user is sharing from right now.
+        /// </summary>
+        private static List<PwDatabase> GetOpenDatabases(MainForm mainWindow)
+        {
+            var result = new List<PwDatabase>();
+            if (mainWindow == null || mainWindow.DocumentManager == null) return result;
+
+            foreach (PwDocument doc in mainWindow.DocumentManager.Documents)
+                if (doc.Database != null && doc.Database.IsOpen) result.Add(doc.Database);
+
+            return result;
         }
 
         /// <summary>
@@ -547,13 +703,14 @@ namespace OneTimeSecret
             if (confirm != DialogResult.OK) return;
 
             var config = new PluginConfig(m_host.CustomConfig);
+            List<PwDatabase> openDatabases = GetOpenDatabases(mainWindow);
             Uri baseUri;
             OtsCredentials credentials;
             try
             {
                 baseUri = UrlPolicy.Validate(config.BaseUrl, config.AllowInsecureHttp);
 
-                CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database);
+                CredentialResolution resolution = CredentialResolver.Resolve(config, m_host.Database, openDatabases);
                 // Same confirm-or-abort gate as sharing: degrading to an anonymous request
                 // for a destructive action deserves the same explicit confirmation sharing
                 // anonymously does, rather than silently trying and failing.
@@ -570,6 +727,16 @@ namespace OneTimeSecret
                 return;
             }
 
+            // The burn endpoint's own description text says it requires the passphrase when
+            // one was set. The receipt write-back now stores the exact passphrase this share
+            // used, for every mode - preferred here since it is guaranteed correct for this
+            // specific share, unlike re-resolving the currently configured Entry-mode entry,
+            // which could have changed since. Only falls back to that live resolution for a
+            // receipt written before the passphrase field existed.
+            string passphrase = ReceiptWriter.TryReadPassphrase(entry);
+            if (string.IsNullOrEmpty(passphrase) && config.PassphraseMode == PassphraseMode.Entry)
+                passphrase = PassphraseResolver.Resolve(config, m_host.Database, openDatabases).Passphrase;
+
             IWebProxy proxy = ProxyResolver.Resolve();
             int timeoutMs = OtsClientV1.DefaultTimeoutMs;
             Func<CancellationToken, IOtsClient> createClient =
@@ -585,7 +752,7 @@ namespace OneTimeSecret
                 Exception failure = null;
                 try
                 {
-                    result = createClient(CancellationToken.None).Burn(receiptKey, CancellationToken.None);
+                    result = createClient(CancellationToken.None).Burn(receiptKey, passphrase, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -602,6 +769,22 @@ namespace OneTimeSecret
                         string message = (failure is OtsException)
                             ? failure.Message
                             : "Unexpected error while burning (" + failure.GetType().Name + "): " + failure.Message;
+
+                        // Only reachable now for a receipt written before the passphrase
+                        // field existed (or with "write the receipt back" off at share time,
+                        // though then there would be no receipt to burn from at all) - a
+                        // current share's exact passphrase is stored alongside its receipt
+                        // and already tried above.
+                        if (string.IsNullOrEmpty(passphrase) &&
+                            message.IndexOf("passphrase", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            message += Environment.NewLine + Environment.NewLine +
+                                "No passphrase was found stored alongside this entry's receipt, so " +
+                                "none could be supplied to the burn request - this share likely " +
+                                "predates that being recorded. Re-share the entry to refresh it, or " +
+                                "burn it from your OneTimeSecret account instead.";
+                        }
+
                         ShowError(mainWindow, message);
                         return;
                     }

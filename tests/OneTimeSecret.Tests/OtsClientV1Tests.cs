@@ -540,11 +540,44 @@ namespace OneTimeSecret.Tests
             // (deprecated but present) burn endpoint, form-encoded like the rest of v1, and
             // "continue" is a required field there too - not just on v2's variants.
             var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
-            Client(transport).Burn("METAKEY", CancellationToken.None);
+            Client(transport).Burn("METAKEY", null, CancellationToken.None);
 
             Assert.Equal("https://eu.onetimesecret.com/api/v1/private/METAKEY/burn",
                 transport.LastUri.AbsoluteUri);
             Assert.Equal("application/x-www-form-urlencoded", transport.LastContentType);
+            Assert.Equal("continue=true", transport.LastBodyText);
+        }
+
+        [Fact]
+        public void Burn_SendsThePassphraseWhenGiven()
+        {
+            // The burn endpoint's own description text (not its formal parameter schema,
+            // which omits this) says it requires the passphrase when one was set - found by
+            // testing a real burn of a PassphraseMode.Entry share, which the server rejected
+            // until this was added.
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
+            Client(transport).Burn("METAKEY", "Corr3ctHorse", CancellationToken.None);
+
+            Assert.Contains("passphrase=Corr3ctHorse", transport.LastBodyText);
+        }
+
+        [Fact]
+        public void Burn_EscapesThePassphrase()
+        {
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
+            Client(transport).Burn("METAKEY", "a&b=c d", CancellationToken.None);
+
+            Assert.Contains("passphrase=" + Uri.EscapeDataString("a&b=c d"), transport.LastBodyText);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void Burn_OmitsThePassphraseWhenNotGiven(string passphrase)
+        {
+            var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
+            Client(transport).Burn("METAKEY", passphrase, CancellationToken.None);
+
             Assert.Equal("continue=true", transport.LastBodyText);
         }
 
@@ -557,7 +590,7 @@ namespace OneTimeSecret.Tests
             // earlier version of the client read the wrong level and would have reported
             // every real burn as unconfirmed.
             var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
-            BurnResult result = Client(transport).Burn("METAKEY", CancellationToken.None);
+            BurnResult result = Client(transport).Burn("METAKEY", null, CancellationToken.None);
 
             Assert.True(result.Burned);
         }
@@ -568,7 +601,7 @@ namespace OneTimeSecret.Tests
             // Regression guard for the bug above: the old (wrong) flat shape must not be
             // silently accepted as success just because it happens to still parse as JSON.
             var transport = new StubTransport(new HttpResult(200, "{\"state\":\"burned\"}"));
-            BurnResult result = Client(transport).Burn("METAKEY", CancellationToken.None);
+            BurnResult result = Client(transport).Burn("METAKEY", null, CancellationToken.None);
 
             Assert.False(result.Burned);
         }
@@ -577,7 +610,7 @@ namespace OneTimeSecret.Tests
         public void Burn_ReturnsBurnedFalseWithDetailWhenStateDidNotChange()
         {
             var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"new\"}}"));
-            BurnResult result = Client(transport).Burn("METAKEY", CancellationToken.None);
+            BurnResult result = Client(transport).Burn("METAKEY", null, CancellationToken.None);
 
             Assert.False(result.Burned);
             Assert.Contains("new", result.Detail);
@@ -588,7 +621,7 @@ namespace OneTimeSecret.Tests
         {
             var transport = new StubTransport(new HttpResult(401, ""));
             var ex = Assert.Throws<OtsException>(() =>
-                Client(transport).Burn("METAKEY", CancellationToken.None));
+                Client(transport).Burn("METAKEY", null, CancellationToken.None));
 
             Assert.Equal(401, ex.StatusCode);
         }
@@ -597,14 +630,14 @@ namespace OneTimeSecret.Tests
         public void Burn_ThrowsOnAnUnreadableBody()
         {
             var transport = new StubTransport(new HttpResult(200, "<html>not json</html>"));
-            Assert.Throws<OtsException>(() => Client(transport).Burn("METAKEY", CancellationToken.None));
+            Assert.Throws<OtsException>(() => Client(transport).Burn("METAKEY", null, CancellationToken.None));
         }
 
         [Fact]
         public void Burn_RejectsAnEmptyReceiptKey()
         {
             var transport = new StubTransport(new HttpResult(200, "{\"state\":{\"state\":\"burned\"}}"));
-            Assert.Throws<ArgumentException>(() => Client(transport).Burn("", CancellationToken.None));
+            Assert.Throws<ArgumentException>(() => Client(transport).Burn("", null, CancellationToken.None));
         }
     }
 }

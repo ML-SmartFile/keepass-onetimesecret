@@ -450,7 +450,7 @@ namespace OneTimeSecret.Tests
             // undocumented beyond its presence. Sending "{}" - what this client used to do -
             // is the most likely reason every burn attempt reported back "success":false.
             var transport = new StubTransport(new HttpResult(200, "{\"success\":true}"));
-            Client(transport).Burn("RECEIPTKEY", CancellationToken.None);
+            Client(transport).Burn("RECEIPTKEY", null, CancellationToken.None);
 
             Assert.Equal("https://eu.onetimesecret.com/api/v2/private/RECEIPTKEY/burn",
                 transport.LastUri.AbsoluteUri);
@@ -458,10 +458,34 @@ namespace OneTimeSecret.Tests
         }
 
         [Fact]
+        public void Burn_SendsThePassphraseWhenGiven()
+        {
+            // The burn endpoint's own description text (not its formal parameter schema,
+            // which omits this) says it requires the passphrase when one was set - found by
+            // testing a real burn of a PassphraseMode.Entry share, which the server rejected
+            // until this was added.
+            var transport = new StubTransport(new HttpResult(200, "{\"success\":true}"));
+            Client(transport).Burn("RECEIPTKEY", "Corr3ctHorse", CancellationToken.None);
+
+            Assert.Equal("{\"continue\":\"true\",\"passphrase\":\"Corr3ctHorse\"}", transport.LastBodyText);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void Burn_OmitsThePassphraseWhenNotGiven(string passphrase)
+        {
+            var transport = new StubTransport(new HttpResult(200, "{\"success\":true}"));
+            Client(transport).Burn("RECEIPTKEY", passphrase, CancellationToken.None);
+
+            Assert.Equal("{\"continue\":\"true\"}", transport.LastBodyText);
+        }
+
+        [Fact]
         public void Burn_EscapesTheReceiptKeyInTheUrl()
         {
             var transport = new StubTransport(new HttpResult(200, "{\"success\":true}"));
-            Client(transport).Burn("has space", CancellationToken.None);
+            Client(transport).Burn("has space", null, CancellationToken.None);
 
             Assert.Contains(Uri.EscapeDataString("has space"), transport.LastUri.AbsoluteUri);
         }
@@ -470,7 +494,7 @@ namespace OneTimeSecret.Tests
         public void Burn_ReturnsBurnedTrueOnSuccess()
         {
             var transport = new StubTransport(new HttpResult(200, "{\"success\":true}"));
-            BurnResult result = Client(transport).Burn("RECEIPTKEY", CancellationToken.None);
+            BurnResult result = Client(transport).Burn("RECEIPTKEY", null, CancellationToken.None);
 
             Assert.True(result.Burned);
         }
@@ -482,7 +506,7 @@ namespace OneTimeSecret.Tests
             // came back as an ordinary HTTP 200, which this client reports as data rather
             // than an exception either way.
             var transport = new StubTransport(new HttpResult(200, RealBurnDeclinedPayload));
-            BurnResult result = Client(transport).Burn("RECEIPTKEY", CancellationToken.None);
+            BurnResult result = Client(transport).Burn("RECEIPTKEY", null, CancellationToken.None);
 
             Assert.False(result.Burned);
             Assert.False(string.IsNullOrEmpty(result.Detail));
@@ -493,7 +517,7 @@ namespace OneTimeSecret.Tests
         {
             var transport = new StubTransport(new HttpResult(401, ""));
             var ex = Assert.Throws<OtsException>(() =>
-                Client(transport).Burn("RECEIPTKEY", CancellationToken.None));
+                Client(transport).Burn("RECEIPTKEY", null, CancellationToken.None));
 
             Assert.Equal(401, ex.StatusCode);
         }
@@ -502,14 +526,14 @@ namespace OneTimeSecret.Tests
         public void Burn_ThrowsOnAnUnreadableBody()
         {
             var transport = new StubTransport(new HttpResult(200, "<html>not json</html>"));
-            Assert.Throws<OtsException>(() => Client(transport).Burn("RECEIPTKEY", CancellationToken.None));
+            Assert.Throws<OtsException>(() => Client(transport).Burn("RECEIPTKEY", null, CancellationToken.None));
         }
 
         [Fact]
         public void Burn_RejectsAnEmptyReceiptKey()
         {
             var transport = new StubTransport(new HttpResult(200, "{\"success\":true}"));
-            Assert.Throws<ArgumentException>(() => Client(transport).Burn("", CancellationToken.None));
+            Assert.Throws<ArgumentException>(() => Client(transport).Burn("", null, CancellationToken.None));
         }
     }
 }

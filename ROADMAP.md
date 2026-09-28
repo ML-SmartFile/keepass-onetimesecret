@@ -1,6 +1,6 @@
 # Roadmap
 
-Seven milestones. Each is a branch and a PR. Do not start the next before the previous
+Eight milestones. Each is a branch and a PR. Do not start the next before the previous
 one's acceptance criteria are met and manually verified in a running KeePass.
 
 ---
@@ -163,9 +163,53 @@ one's acceptance criteria are met and manually verified in a running KeePass.
 
 ---
 
-## M6 — Packaging and release
+## M6 — Multi-KeePass files
 
-**Branch:** `m6-release`
+**Branch:** `m6-multi-db`
+
+Scheduled 2026-09-27, ahead of packaging, after the code review (see the
+`code-review-fixes` progress note) flagged that the credential and passphrase entry
+references lived in KeePass's single global `CustomConfig`, with no notion of which
+`.kdbx` a reference belongs to — a `PwUuid` is only unique within its own database.
+Design went through two rejected drafts before landing on the real requirement (full
+write-up in the progress note below); the shipped design:
+
+- **Per-database primary reference**, in that database's own `PwDatabase.CustomData` —
+  travels with the file, works automatically on another PC with the plugin installed.
+  Requires saving the database (Ctrl+S) to persist, like any other KeePass edit.
+- **Global fallback pointer** (`CredentialFallback`/`PassphraseFallback`), in
+  `CustomConfig`, local to the machine only, never written into any `.kdbx` — the entry
+  other open databases with none of their own configured can borrow, but only while the
+  database holding it is open in another tab. Set via a "Use This Entry" button next to
+  each database's own entry picker in Options.
+- One-time migration of a pre-M6 install's global reference into the first database
+  Options is opened against, promoted to the fallback automatically.
+
+**Acceptance:**
+- Configure credentials in `Main.kdbx`, mark as fallback. With `Main.kdbx` and
+  `Customer.kdbx` (no credentials of its own) both open in separate tabs: sharing from
+  an entry in `Customer.kdbx` uses `Main.kdbx`'s credentials.
+- With only `Customer.kdbx` open: sharing from it degrades to anonymous with a warning
+  naming the fallback database as not currently open — not the generic "nothing
+  configured" message.
+- Configuring `Customer.kdbx` with its own credential entry makes it use that one even
+  while `Main.kdbx` is also open.
+- Deleting the entry backing a database's own primary reference produces "no longer
+  exists in this database" and shares anonymously — does not silently fall through to
+  the fallback.
+- `Customer.kdbx`'s raw file content carries no reference to `Main.kdbx`, its entries,
+  or its credentials, at any point in the above.
+- An existing single-database install still works after upgrading, and is automatically
+  available as the fallback the first time a second database is opened.
+- Clearing a database's own reference, then reopening Options for it later, stays
+  cleared (not silently re-migrated from the legacy global value).
+- Same coverage, mirrored for the passphrase-entry fallback.
+
+---
+
+## M7 — Packaging and release
+
+**Branch:** `m7-release`
 
 - `build/build-plgx.ps1` producing a working `.plgx`
 - `Plugin.UpdateUrl` pointing at a version file in the repo
@@ -592,3 +636,90 @@ now corrected there. Full comparison:
 - Minor layout fix: the new `m_writeBackReceipt` checkbox (79 characters) was sized for
   one line and would have clipped its second line - the same class of bug as M4's
   `AutoSize` findings, just on a `CheckBox` rather than a `Label` this time.
+
+<!-- M6: -->
+**M6 — 2026-09-28.** Multi-database credential/passphrase resolution. Design went
+through two rejected drafts before landing on the shipped one - recorded in full since a
+future session should not re-propose either:
+
+1. *Store both references in `PwDatabase.CustomData`, nothing else changes.* Rejected:
+   some databases are shared with customers, and most databases have no OTS credentials
+   of their own to store in the first place - a bare per-database reference doesn't
+   address that.
+2. *Keep everything in global `CustomConfig`, namespaced per database by
+   `PwDatabase.RootGroup.Uuid`.* Rejected: the user is fine with storing a reference
+   inside the `.kdbx` itself (it travels to another PC with the plugin installed for
+   free) - the actual gap is that most databases need to *borrow* the credential entry
+   configured in the user's main database, not get their own.
+3. **Shipped**: a database's own reference lives in its own `PwDatabase.CustomData`; a
+   separate, global, local-only fallback pointer (`PluginConfig.CredentialFallback`/
+   `PassphraseFallback`) names a database (`PwDatabase.RootGroup.Uuid`) and an entry
+   inside it, resolved only when that database happens to be open in another tab
+   (`MainForm.DocumentManager.Documents`). See `SPEC.md` section 6 for the full
+   resolution order and the reasoning for the split.
+
+Implementation notes:
+
+- `DatabaseScopedConfig` (new) mirrors `PluginConfig`'s existing hex `PwUuid`
+  read/write logic against `PwDatabase.CustomData.Get/Set/Remove` instead of
+  `AceCustomConfig` - same encode/decode, different backing store.
+- A broken *own* reference (entry deleted from the database that configured it) fails
+  loudly rather than falling through to the fallback - the user configured this
+  database explicitly and should hear that it broke, not silently get a different
+  credential they never asked this database to use. Only an *unconfigured* database
+  (nothing of its own either way) tries the fallback.
+- Migration is automatic and one-time per database, guarded by a
+  `CustomData["OneTimeSecret.Migrated"]` marker set unconditionally the first time
+  Options opens for that database post-upgrade - without it, an explicit later "Clear"
+  (which just removes the key, indistinguishable from "never configured") would have
+  been silently repopulated from the stale pre-M6 global value on the next Options open.
+- Writing the primary reference marks the database modified (`mainWindow.UpdateUI`, the
+  same call `WriteBackReceipt` already uses) only when it actually changed, so an
+  Options save that touches nothing but a global setting does not spuriously prompt
+  "save changes?" on exit. The fallback pointer, being global `CustomConfig`, still
+  saves instantly with no such flag - a real, deliberate asymmetry between the two
+  tiers, not an inconsistency.
+Smoke-tested by the user against two real, simultaneously open `.kdbx` files (a
+`test.kdbx` with credentials configured, and a throwaway `Customer.kdbx` with none of
+its own) - `KeePassAdapters/` has never been unit-testable (per M1's notes), so this
+milestone's acceptance criteria were manual-only. Found and fixed three real bugs in the
+process, none caught by the build or the 218 (now 225) passing unit tests:
+
+- **Confirmed, fixed: migration copied the legacy global reference into every database,
+  not just the one it actually belonged to.** `MigrateLegacyReferences` ran the first
+  time Options opened for *any* database post-upgrade and unconditionally copied the
+  pre-M6 global `CredentialEntryUuid` into that database's own `CustomData` - including
+  `Customer.kdbx`, which never had that entry, producing a false "no longer exists in
+  this database" the moment its Options was first opened. The legacy value has no idea
+  which database it belongs to either (the exact problem M6 exists to fix), so blindly
+  trusting it for every database reintroduced the same confusion one level down. Fixed:
+  migration now only applies to a database if `database.RootGroup.FindEntry` actually
+  finds the referenced entry there; otherwise it just marks that database migrated (so
+  the check is not needlessly repeated) and leaves its primary reference untouched.
+- **Fixed, cosmetic: the fallback status text showed the entry's title and username, not
+  just the database name.** `"Use This Entry"` built its cached `Display` string as
+  `"{database} - {entry title} - {username}"`; shown back in the "fallback database not
+  open" warning, this read as unnecessarily specific (and, for a database shared with a
+  customer, would have named an entry in a database the customer has no business knowing
+  about). Fixed to store just the database name.
+- **Confirmed, fixed: burning a passphrase-protected secret was rejected by the server,
+  for every passphrase mode.** Found by the user testing burn against a real account:
+  the error named the passphrase specifically. First fixed narrowly for
+  `PassphraseMode.Entry` only (its passphrase is re-derivable from current config, so
+  `OnBurnClick` could just re-resolve it) - the user's own follow-up test then showed the
+  identical rejection for `Generate` and `Manual` shares too, which an earlier, less
+  rigorous test round had wrongly reported as working. Re-resolving is structurally
+  impossible for those two (the passphrase is shown once in `ResultForm` and was never
+  persisted anywhere), so the real fix is different: **the user asked for the passphrase
+  to be written back alongside the receipt** (a second protected custom string, `OTS
+  Passphrase`, cleared together with `OTS Receipt` on burn or removal) rather than
+  accepting the gap as permanent - rejecting an earlier, more conservative instinct to
+  just document it as an unfixable limitation. This is not the `KeePass.config.xml`
+  problem non-negotiable #5 rules out: it never leaves the entry, and is protected the
+  same way that entry's own password already is. `IOtsClient.Burn` gained a `passphrase`
+  parameter, sent the same way Share already sends it (`passphrase=...` form field on
+  v1, `"passphrase":"..."` JSON field on v2); `OnBurnClick` now reads the receipt's own
+  stored passphrase first (correct for this specific share regardless of mode, and
+  immune to the configured `Entry` entry having changed since), falling back to a live
+  `PassphraseResolver` re-resolution only for a receipt written before this field
+  existed.
