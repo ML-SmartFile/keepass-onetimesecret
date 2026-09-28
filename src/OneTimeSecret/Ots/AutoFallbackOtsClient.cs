@@ -51,18 +51,18 @@ namespace OneTimeSecret.Ots
             }
         }
 
-        public BurnResult Burn(string receiptKey, CancellationToken cancellationToken)
+        public BurnResult Burn(string receiptKey, string passphrase, CancellationToken cancellationToken)
         {
             try
             {
-                return m_primary.Burn(receiptKey, cancellationToken);
+                return m_primary.Burn(receiptKey, passphrase, cancellationToken);
             }
             catch (OtsException ex)
             {
                 if (ex.StatusCode != 404) throw;
 
                 // Deliberately no m_onFallback() here - see the class remarks above.
-                return m_fallbackFactory().Burn(receiptKey, cancellationToken);
+                return m_fallbackFactory().Burn(receiptKey, passphrase, cancellationToken);
             }
         }
     }

@@ -208,7 +208,7 @@ namespace OneTimeSecret.Tests
                 return m_result;
             }
 
-            public BurnResult Burn(string receiptKey, CancellationToken cancellationToken)
+            public BurnResult Burn(string receiptKey, string passphrase, CancellationToken cancellationToken)
             {
                 WasCalled = true;
                 if (m_failure != null) throw m_failure;
@@ -282,7 +282,7 @@ namespace OneTimeSecret.Tests
             var fallback = new StubClient(FakeResult());
 
             var client = new AutoFallbackOtsClient(primary, () => fallback, null);
-            client.Burn("RK", CancellationToken.None);
+            client.Burn("RK", null, CancellationToken.None);
 
             Assert.True(fallback.WasCalled);
         }
@@ -300,7 +300,7 @@ namespace OneTimeSecret.Tests
             bool cacheWritten = false;
 
             var client = new AutoFallbackOtsClient(primary, () => fallback, () => cacheWritten = true);
-            client.Burn("RK", CancellationToken.None);
+            client.Burn("RK", null, CancellationToken.None);
 
             Assert.False(cacheWritten);
         }
@@ -313,7 +313,7 @@ namespace OneTimeSecret.Tests
 
             var client = new AutoFallbackOtsClient(primary, () => fallback, null);
 
-            var ex = Assert.Throws<OtsException>(() => client.Burn("RK", CancellationToken.None));
+            var ex = Assert.Throws<OtsException>(() => client.Burn("RK", null, CancellationToken.None));
             Assert.Equal(401, ex.StatusCode);
             Assert.False(fallback.WasCalled);
         }

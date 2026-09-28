@@ -679,7 +679,47 @@ Implementation notes:
   "save changes?" on exit. The fallback pointer, being global `CustomConfig`, still
   saves instantly with no such flag - a real, deliberate asymmetry between the two
   tiers, not an inconsistency.
-- Not yet manually smoke-tested against two real, simultaneously open `.kdbx` files -
-  `KeePassAdapters/` has never been unit-testable (per M1's notes, the test project
-  excludes anything referencing KeePass types), so this milestone's acceptance criteria
-  are manual-only and still pending the user's own testing pass.
+Smoke-tested by the user against two real, simultaneously open `.kdbx` files (a
+`test.kdbx` with credentials configured, and a throwaway `Customer.kdbx` with none of
+its own) - `KeePassAdapters/` has never been unit-testable (per M1's notes), so this
+milestone's acceptance criteria were manual-only. Found and fixed three real bugs in the
+process, none caught by the build or the 218 (now 225) passing unit tests:
+
+- **Confirmed, fixed: migration copied the legacy global reference into every database,
+  not just the one it actually belonged to.** `MigrateLegacyReferences` ran the first
+  time Options opened for *any* database post-upgrade and unconditionally copied the
+  pre-M6 global `CredentialEntryUuid` into that database's own `CustomData` - including
+  `Customer.kdbx`, which never had that entry, producing a false "no longer exists in
+  this database" the moment its Options was first opened. The legacy value has no idea
+  which database it belongs to either (the exact problem M6 exists to fix), so blindly
+  trusting it for every database reintroduced the same confusion one level down. Fixed:
+  migration now only applies to a database if `database.RootGroup.FindEntry` actually
+  finds the referenced entry there; otherwise it just marks that database migrated (so
+  the check is not needlessly repeated) and leaves its primary reference untouched.
+- **Fixed, cosmetic: the fallback status text showed the entry's title and username, not
+  just the database name.** `"Use This Entry"` built its cached `Display` string as
+  `"{database} - {entry title} - {username}"`; shown back in the "fallback database not
+  open" warning, this read as unnecessarily specific (and, for a database shared with a
+  customer, would have named an entry in a database the customer has no business knowing
+  about). Fixed to store just the database name.
+- **Confirmed, fixed: burning a secret shared with a `PassphraseMode.Entry` passphrase
+  was rejected by the server.** Found by the user testing burn against a real account:
+  the error named the passphrase specifically. `SPEC.md` section 5's burn documentation
+  only formally lists a `continue` body field, but the operation's own description text
+  says a passphrase is required when one was set - confirmed by testing, not assumed.
+  `IOtsClient.Burn` gained a `passphrase` parameter, sent the same way Share already
+  sends it (`passphrase=...` form field on v1, `"passphrase":"..."` JSON field on v2);
+  `OnBurnClick` resolves it via `PassphraseResolver` exactly like Share does, but only
+  when the currently configured mode is `Entry` - the only mode whose passphrase is ever
+  re-derivable after the fact.
+- **Confirmed, structural limitation, not fixed: `PassphraseMode.Generate`/`Manual`
+  shares cannot be burned through this plugin.** The user's own follow-up test showed
+  the identical passphrase-rejection error for both modes once actually tried (an
+  earlier, less rigorous test round had reported Generate-mode burns as working; that
+  turned out not to hold up). This cannot be fixed without storing a secret this plugin
+  has deliberately never persisted anywhere - a generated or manually entered passphrase
+  is shown once in `ResultForm` and gone. `OnBurnClick` now detects the resulting
+  passphrase-shaped rejection and explains the limitation directly (burn from the
+  OneTimeSecret account instead, or let it expire) rather than surfacing a bare server
+  error. Recorded here as a real, permanent gap - not something to revisit without
+  relaxing the no-stored-secrets rule.

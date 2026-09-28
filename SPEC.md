@@ -379,6 +379,19 @@ Authorization: Basic <base64(user:token)>        (omit for anonymous)
 >    encoded like the rest of v1, deprecated but present). An earlier draft of this spec
 >    assumed burning was v2-only; that was never verified and was wrong. `OtsClientV1` now
 >    implements it.
+> 3. **Burning a passphrase-protected secret requires the passphrase** — found by M6
+>    testing, not the docs' formal parameter schema (which lists only `continue`): the
+>    operation's own description text reads "Requires the receipt identifier and a
+>    passphrase if one was set," and a real burn of a `PassphraseMode.Entry` share was
+>    rejected with a 4xx naming the passphrase until one was included in the burn body
+>    too (`passphrase=...` on v1, `"passphrase":"..."` on v2 — same field name and
+>    encoding as Share). **This is only ever fixable for `PassphraseMode.Entry`**: that
+>    passphrase lives in a standing KeePass entry and can be re-read at burn time, exactly
+>    like at share time. A generated or manually entered passphrase is shown once in
+>    `ResultForm` and deliberately never persisted (storing it against a future burn would
+>    be exactly the stored-secret problem `CLAUDE.md` rules out) — burning such a secret
+>    through this plugin is a structural limitation, not a bug, and `OnBurnClick` detects
+>    the resulting error and says so rather than showing a bare server rejection.
 >
 > Earlier testing (before the `continue` field was found) captured this: three anonymous
 > burn attempts — a bare cross-session call, one replaying the creating session's cookie,

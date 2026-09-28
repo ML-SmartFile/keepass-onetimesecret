@@ -456,11 +456,13 @@ namespace OneTimeSecret.Ui
                 return;
             }
 
+            // Just the database name, not which entry - shown back in warning dialogs
+            // elsewhere in the plugin, where naming the specific entry would be noise (or,
+            // for a database shared with a customer, an unwanted detail about the fallback
+            // database's own contents).
             m_credentialFallbackDatabaseUuidHex = m_activeDatabaseUuidHex;
             m_credentialFallbackEntryUuidHex = m_credentialUuidHex;
-            m_credentialFallbackDisplay = string.IsNullOrEmpty(m_activeDatabaseDisplayName)
-                ? m_credentialDisplay.Text
-                : m_activeDatabaseDisplayName + "  -  " + m_credentialDisplay.Text;
+            m_credentialFallbackDisplay = m_activeDatabaseDisplayName;
             m_credentialFallbackStatus.Text = m_credentialFallbackDisplay;
         }
 
@@ -482,11 +484,10 @@ namespace OneTimeSecret.Ui
                 return;
             }
 
+            // Just the database name - see OnSetCredentialFallback.
             m_passphraseFallbackDatabaseUuidHex = m_activeDatabaseUuidHex;
             m_passphraseFallbackEntryUuidHex = m_passphraseEntryUuidHex;
-            m_passphraseFallbackDisplay = string.IsNullOrEmpty(m_activeDatabaseDisplayName)
-                ? m_passphraseEntryDisplay.Text
-                : m_activeDatabaseDisplayName + "  -  " + m_passphraseEntryDisplay.Text;
+            m_passphraseFallbackDisplay = m_activeDatabaseDisplayName;
             m_passphraseFallbackStatus.Text = m_passphraseFallbackDisplay;
         }
 

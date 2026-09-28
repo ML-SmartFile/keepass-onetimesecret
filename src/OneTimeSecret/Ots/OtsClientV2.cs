@@ -77,7 +77,7 @@ namespace OneTimeSecret.Ots
             return ParseShareResponse(response.Body, request.TtlSeconds);
         }
 
-        public BurnResult Burn(string receiptKey, CancellationToken cancellationToken)
+        public BurnResult Burn(string receiptKey, string passphrase, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(receiptKey)) throw new ArgumentException("receiptKey is required.", "receiptKey");
 
@@ -92,8 +92,23 @@ namespace OneTimeSecret.Ots
                 // body field with no documented meaning beyond its presence. Omitting it -
                 // as this client did until now - is very likely why every burn attempt came
                 // back HTTP 200 with "success":false, authenticated or not.
+                //
+                // The operation's own description text (not its formal parameter schema,
+                // which omits this) reads "Requires the receipt identifier and a passphrase
+                // if one was set" - confirmed by testing: burning a secret shared with a
+                // PassphraseMode.Entry passphrase was rejected with a 4xx naming the
+                // passphrase, until it was included here too.
+                var sb = new StringBuilder();
+                sb.Append("{\"continue\":\"true\"");
+                if (!string.IsNullOrEmpty(passphrase))
+                {
+                    sb.Append(",\"passphrase\":");
+                    AppendJsonString(sb, passphrase);
+                }
+                sb.Append('}');
+
                 response = m_transport.Post(
-                    endpoint, "application/json", Encoding.UTF8.GetBytes("{\"continue\":\"true\"}"),
+                    endpoint, "application/json", Encoding.UTF8.GetBytes(sb.ToString()),
                     BasicAuth.Header(m_credentials), m_timeoutMs, cancellationToken);
             }
             catch (HttpTransportException ex)

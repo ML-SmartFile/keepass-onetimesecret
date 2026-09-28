@@ -101,8 +101,15 @@ namespace OneTimeSecret.Ots
         /// <summary>
         /// Burns a previously-shared secret by its receipt key. Both v1 and v2 support this
         /// (v1's is deprecated but present) - see SPEC.md section 5.
+        ///
+        /// <paramref name="passphrase"/> is best-effort and may be null/empty: the official
+        /// docs state burning a passphrase-protected secret requires the passphrase, but
+        /// this plugin only ever has one to offer when the share used a standing entry-
+        /// sourced passphrase (PassphraseMode.Entry) that is still resolvable at burn time -
+        /// a generated or manually-entered one is deliberately never persisted, so it cannot
+        /// be recovered later regardless of what the server needs.
         /// </summary>
-        BurnResult Burn(string receiptKey, CancellationToken cancellationToken);
+        BurnResult Burn(string receiptKey, string passphrase, CancellationToken cancellationToken);
     }
 
     /// <summary>

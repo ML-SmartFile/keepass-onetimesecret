@@ -553,12 +553,21 @@ namespace OneTimeSecret
         {
             if (!DatabaseScopedConfig.NeedsMigration(database)) return;
 
-            PwUuid legacyCredential = config.LegacyCredentialEntryUuid;
-            PwUuid legacyPassphrase = config.LegacyPassphraseEntryUuid;
+            // The legacy global value has no idea which database it was configured
+            // against either - that was the whole bug M6 fixed. Blindly copying it into
+            // every database's own storage the first time Options opens there would just
+            // reintroduce the same cross-database confusion one level down (confirmed by
+            // testing: it showed up as a false "no longer exists in this database" on a
+            // second database that never had this entry to begin with). Only apply it to
+            // whichever database actually contains the referenced entry.
+            bool changed = false;
 
-            if (!legacyCredential.Equals(PwUuid.Zero))
+            PwUuid legacyCredential = config.LegacyCredentialEntryUuid;
+            if (!legacyCredential.Equals(PwUuid.Zero) &&
+                database.RootGroup.FindEntry(legacyCredential, true) != null)
             {
                 DatabaseScopedConfig.SetCredentialEntryUuid(database, legacyCredential);
+                changed = true;
                 if (config.CredentialFallback == null)
                     config.CredentialFallback = new FallbackReference
                     {
@@ -568,9 +577,12 @@ namespace OneTimeSecret
                     };
             }
 
-            if (!legacyPassphrase.Equals(PwUuid.Zero))
+            PwUuid legacyPassphrase = config.LegacyPassphraseEntryUuid;
+            if (!legacyPassphrase.Equals(PwUuid.Zero) &&
+                database.RootGroup.FindEntry(legacyPassphrase, true) != null)
             {
                 DatabaseScopedConfig.SetPassphraseEntryUuid(database, legacyPassphrase);
+                changed = true;
                 if (config.PassphraseFallback == null)
                     config.PassphraseFallback = new FallbackReference
                     {
@@ -581,7 +593,11 @@ namespace OneTimeSecret
             }
 
             DatabaseScopedConfig.MarkMigrated(database);
-            mainWindow.UpdateUI(false, null, false, null, true, null, true);
+            // Only mark the database modified (prompting a save) when something was
+            // actually written for the user's benefit - not merely for the in-memory
+            // migration marker, which is harmless to recheck again next time if the
+            // database happens to close without being saved for any other reason.
+            if (changed) mainWindow.UpdateUI(false, null, false, null, true, null, true);
         }
 
         private static FallbackReference ToFallbackReference(FallbackState state)
@@ -709,6 +725,18 @@ namespace OneTimeSecret
                 return;
             }
 
+            // Best effort: the burn endpoint's own description text says it requires the
+            // passphrase when one was set, but nothing here actually knows whether this
+            // particular past share used one - only that a standing, entry-sourced
+            // passphrase (Entry mode) is resolvable again now, unlike a generated or
+            // manually entered one, which is deliberately never persisted and so cannot be
+            // recovered after the fact regardless of what the server needs. A resolution
+            // failure here must not block the burn itself - it is tried without the
+            // passphrase instead, same as before this existed.
+            string passphrase = (config.PassphraseMode == PassphraseMode.Entry)
+                ? PassphraseResolver.Resolve(config, m_host.Database, openDatabases).Passphrase
+                : null;
+
             IWebProxy proxy = ProxyResolver.Resolve();
             int timeoutMs = OtsClientV1.DefaultTimeoutMs;
             Func<CancellationToken, IOtsClient> createClient =
@@ -724,7 +752,7 @@ namespace OneTimeSecret
                 Exception failure = null;
                 try
                 {
-                    result = createClient(CancellationToken.None).Burn(receiptKey, CancellationToken.None);
+                    result = createClient(CancellationToken.None).Burn(receiptKey, passphrase, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -741,6 +769,29 @@ namespace OneTimeSecret
                         string message = (failure is OtsException)
                             ? failure.Message
                             : "Unexpected error while burning (" + failure.GetType().Name + "): " + failure.Message;
+
+                        // A structural limitation, not a bug this plugin can fix: burning a
+                        // passphrase-protected secret requires the original passphrase (per
+                        // the burn endpoint's own description text), but a generated or
+                        // manually entered one is shown once and deliberately never
+                        // persisted - storing it "just in case burn needs it later" would be
+                        // exactly the stored-secret problem CLAUDE.md rules out. Only a
+                        // standing entry passphrase (PassphraseMode.Entry) is resolvable
+                        // again here, and that path already sent one above. Found by testing:
+                        // confirmed the server rejects the burn with a message naming the
+                        // passphrase specifically, for both Generate- and Manual-mode shares.
+                        if (string.IsNullOrEmpty(passphrase) &&
+                            message.IndexOf("passphrase", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            message += Environment.NewLine + Environment.NewLine +
+                                "This plugin only ever keeps a passphrase that is re-readable from a " +
+                                "standing KeePass entry (Passphrase mode \"From a KeePass entry\"). A " +
+                                "generated or manually entered passphrase is shown once and never " +
+                                "stored, so it cannot be supplied again to burn this secret " +
+                                "automatically. Burn it from your OneTimeSecret account instead, or " +
+                                "let it expire on its own.";
+                        }
+
                         ShowError(mainWindow, message);
                         return;
                     }
