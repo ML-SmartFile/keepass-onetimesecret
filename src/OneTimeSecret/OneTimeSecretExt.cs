@@ -201,7 +201,8 @@ namespace OneTimeSecret
 
                 if (answer != DialogResult.OK || form.Result == null) return;
 
-                if (config.WriteBackReceipt) WriteBackReceipt(mainWindow, m_host.Database, entry, form.Result);
+                if (config.WriteBackReceipt)
+                    WriteBackReceipt(mainWindow, m_host.Database, entry, form.Result, form.PassphraseUsed);
 
                 OnShareSucceeded(mainWindow, form.Result, form.PassphraseUsed, entry);
             }
@@ -212,14 +213,15 @@ namespace OneTimeSecret
         /// database locked between dispatch and here) must not turn a successful share into
         /// an error dialog. The user already has the link either way.
         /// </summary>
-        private void WriteBackReceipt(MainForm mainWindow, PwDatabase database, PwEntry entry, ShareResult result)
+        private void WriteBackReceipt(
+            MainForm mainWindow, PwDatabase database, PwEntry entry, ShareResult result, string passphrase)
         {
             if (database == null || !database.IsOpen) return;
 
             PwEntry current = database.RootGroup.FindEntry(entry.Uuid, true);
             if (current == null) return;
 
-            ReceiptWriter.Write(current, result.MetadataKey, DateTime.UtcNow);
+            ReceiptWriter.Write(current, result.MetadataKey, DateTime.UtcNow, passphrase);
             mainWindow.UpdateUI(false, null, false, null, true, null, true);
         }
 
@@ -399,7 +401,7 @@ namespace OneTimeSecret
                     bool sourceStillOpen = sourceDatabase != null && sourceDatabase.IsOpen;
 
                     if (config.WriteBackReceipt && sourceStillOpen)
-                        WriteBackReceipt(mainWindow, sourceDatabase, entry, result);
+                        WriteBackReceipt(mainWindow, sourceDatabase, entry, result, passphrase);
 
                     if (!sourceStillOpen)
                     {
@@ -725,17 +727,15 @@ namespace OneTimeSecret
                 return;
             }
 
-            // Best effort: the burn endpoint's own description text says it requires the
-            // passphrase when one was set, but nothing here actually knows whether this
-            // particular past share used one - only that a standing, entry-sourced
-            // passphrase (Entry mode) is resolvable again now, unlike a generated or
-            // manually entered one, which is deliberately never persisted and so cannot be
-            // recovered after the fact regardless of what the server needs. A resolution
-            // failure here must not block the burn itself - it is tried without the
-            // passphrase instead, same as before this existed.
-            string passphrase = (config.PassphraseMode == PassphraseMode.Entry)
-                ? PassphraseResolver.Resolve(config, m_host.Database, openDatabases).Passphrase
-                : null;
+            // The burn endpoint's own description text says it requires the passphrase when
+            // one was set. The receipt write-back now stores the exact passphrase this share
+            // used, for every mode - preferred here since it is guaranteed correct for this
+            // specific share, unlike re-resolving the currently configured Entry-mode entry,
+            // which could have changed since. Only falls back to that live resolution for a
+            // receipt written before the passphrase field existed.
+            string passphrase = ReceiptWriter.TryReadPassphrase(entry);
+            if (string.IsNullOrEmpty(passphrase) && config.PassphraseMode == PassphraseMode.Entry)
+                passphrase = PassphraseResolver.Resolve(config, m_host.Database, openDatabases).Passphrase;
 
             IWebProxy proxy = ProxyResolver.Resolve();
             int timeoutMs = OtsClientV1.DefaultTimeoutMs;
@@ -770,26 +770,19 @@ namespace OneTimeSecret
                             ? failure.Message
                             : "Unexpected error while burning (" + failure.GetType().Name + "): " + failure.Message;
 
-                        // A structural limitation, not a bug this plugin can fix: burning a
-                        // passphrase-protected secret requires the original passphrase (per
-                        // the burn endpoint's own description text), but a generated or
-                        // manually entered one is shown once and deliberately never
-                        // persisted - storing it "just in case burn needs it later" would be
-                        // exactly the stored-secret problem CLAUDE.md rules out. Only a
-                        // standing entry passphrase (PassphraseMode.Entry) is resolvable
-                        // again here, and that path already sent one above. Found by testing:
-                        // confirmed the server rejects the burn with a message naming the
-                        // passphrase specifically, for both Generate- and Manual-mode shares.
+                        // Only reachable now for a receipt written before the passphrase
+                        // field existed (or with "write the receipt back" off at share time,
+                        // though then there would be no receipt to burn from at all) - a
+                        // current share's exact passphrase is stored alongside its receipt
+                        // and already tried above.
                         if (string.IsNullOrEmpty(passphrase) &&
                             message.IndexOf("passphrase", StringComparison.OrdinalIgnoreCase) >= 0)
                         {
                             message += Environment.NewLine + Environment.NewLine +
-                                "This plugin only ever keeps a passphrase that is re-readable from a " +
-                                "standing KeePass entry (Passphrase mode \"From a KeePass entry\"). A " +
-                                "generated or manually entered passphrase is shown once and never " +
-                                "stored, so it cannot be supplied again to burn this secret " +
-                                "automatically. Burn it from your OneTimeSecret account instead, or " +
-                                "let it expire on its own.";
+                                "No passphrase was found stored alongside this entry's receipt, so " +
+                                "none could be supplied to the burn request - this share likely " +
+                                "predates that being recorded. Re-share the entry to refresh it, or " +
+                                "burn it from your OneTimeSecret account instead.";
                         }
 
                         ShowError(mainWindow, message);

@@ -382,16 +382,15 @@ Authorization: Basic <base64(user:token)>        (omit for anonymous)
 > 3. **Burning a passphrase-protected secret requires the passphrase** — found by M6
 >    testing, not the docs' formal parameter schema (which lists only `continue`): the
 >    operation's own description text reads "Requires the receipt identifier and a
->    passphrase if one was set," and a real burn of a `PassphraseMode.Entry` share was
->    rejected with a 4xx naming the passphrase until one was included in the burn body
->    too (`passphrase=...` on v1, `"passphrase":"..."` on v2 — same field name and
->    encoding as Share). **This is only ever fixable for `PassphraseMode.Entry`**: that
->    passphrase lives in a standing KeePass entry and can be re-read at burn time, exactly
->    like at share time. A generated or manually entered passphrase is shown once in
->    `ResultForm` and deliberately never persisted (storing it against a future burn would
->    be exactly the stored-secret problem `CLAUDE.md` rules out) — burning such a secret
->    through this plugin is a structural limitation, not a bug, and `OnBurnClick` detects
->    the resulting error and says so rather than showing a bare server rejection.
+>    passphrase if one was set," and confirmed for every passphrase mode, not just
+>    `PassphraseMode.Entry` — a real burn of a `Generate`- and a `Manual`-mode share was
+>    rejected too, disproving an earlier assumption that only `Entry`'s standing,
+>    re-readable passphrase mattered here. Fixed by having the receipt write-back (see
+>    section 7) also store the exact passphrase each share used, alongside the receipt,
+>    cleared together with it — `OnBurnClick` reads it back and sends it the same way
+>    Share does (`passphrase=...` on v1, `"passphrase":"..."` on v2). Only unreachable for
+>    a receipt written before this field existed, or with write-back off (in which case
+>    there is no receipt to burn from either way).
 >
 > Earlier testing (before the `continue` field was found) captured this: three anonymous
 > burn attempts — a bare cross-session call, one replaying the creating session's cookie,
@@ -533,7 +532,11 @@ re-selection.
 5. Optionally (if `WriteBackReceipt`) the receipt key and a UTC timestamp are written to
    a **protected** custom string field `OTS Receipt` on the entry, enabling
    **OneTimeSecret → Burn Last Share…** from that entry's own context menu, right below
-   Share. Only enabled when the field is present; burning removes it again on success.
+   Share. Only enabled when the field is present; burning removes it again on success. If
+   this share had a passphrase (any mode), it is written too, to a second protected field
+   `OTS Passphrase` — burning a passphrase-protected secret requires the exact passphrase
+   (section 5), and this is the only way to have it again later without asking the user
+   to re-enter it at burn time. Cleared together with the receipt, never left behind.
 
 ### Quick Share
 

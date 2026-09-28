@@ -702,24 +702,24 @@ process, none caught by the build or the 218 (now 225) passing unit tests:
   open" warning, this read as unnecessarily specific (and, for a database shared with a
   customer, would have named an entry in a database the customer has no business knowing
   about). Fixed to store just the database name.
-- **Confirmed, fixed: burning a secret shared with a `PassphraseMode.Entry` passphrase
-  was rejected by the server.** Found by the user testing burn against a real account:
-  the error named the passphrase specifically. `SPEC.md` section 5's burn documentation
-  only formally lists a `continue` body field, but the operation's own description text
-  says a passphrase is required when one was set - confirmed by testing, not assumed.
-  `IOtsClient.Burn` gained a `passphrase` parameter, sent the same way Share already
-  sends it (`passphrase=...` form field on v1, `"passphrase":"..."` JSON field on v2);
-  `OnBurnClick` resolves it via `PassphraseResolver` exactly like Share does, but only
-  when the currently configured mode is `Entry` - the only mode whose passphrase is ever
-  re-derivable after the fact.
-- **Confirmed, structural limitation, not fixed: `PassphraseMode.Generate`/`Manual`
-  shares cannot be burned through this plugin.** The user's own follow-up test showed
-  the identical passphrase-rejection error for both modes once actually tried (an
-  earlier, less rigorous test round had reported Generate-mode burns as working; that
-  turned out not to hold up). This cannot be fixed without storing a secret this plugin
-  has deliberately never persisted anywhere - a generated or manually entered passphrase
-  is shown once in `ResultForm` and gone. `OnBurnClick` now detects the resulting
-  passphrase-shaped rejection and explains the limitation directly (burn from the
-  OneTimeSecret account instead, or let it expire) rather than surfacing a bare server
-  error. Recorded here as a real, permanent gap - not something to revisit without
-  relaxing the no-stored-secrets rule.
+- **Confirmed, fixed: burning a passphrase-protected secret was rejected by the server,
+  for every passphrase mode.** Found by the user testing burn against a real account:
+  the error named the passphrase specifically. First fixed narrowly for
+  `PassphraseMode.Entry` only (its passphrase is re-derivable from current config, so
+  `OnBurnClick` could just re-resolve it) - the user's own follow-up test then showed the
+  identical rejection for `Generate` and `Manual` shares too, which an earlier, less
+  rigorous test round had wrongly reported as working. Re-resolving is structurally
+  impossible for those two (the passphrase is shown once in `ResultForm` and was never
+  persisted anywhere), so the real fix is different: **the user asked for the passphrase
+  to be written back alongside the receipt** (a second protected custom string, `OTS
+  Passphrase`, cleared together with `OTS Receipt` on burn or removal) rather than
+  accepting the gap as permanent - rejecting an earlier, more conservative instinct to
+  just document it as an unfixable limitation. This is not the `KeePass.config.xml`
+  problem non-negotiable #5 rules out: it never leaves the entry, and is protected the
+  same way that entry's own password already is. `IOtsClient.Burn` gained a `passphrase`
+  parameter, sent the same way Share already sends it (`passphrase=...` form field on
+  v1, `"passphrase":"..."` JSON field on v2); `OnBurnClick` now reads the receipt's own
+  stored passphrase first (correct for this specific share regardless of mode, and
+  immune to the configured `Entry` entry having changed since), falling back to a live
+  `PassphraseResolver` re-resolution only for a receipt written before this field
+  existed.

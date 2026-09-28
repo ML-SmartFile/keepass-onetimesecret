@@ -285,15 +285,17 @@ namespace OneTimeSecret.Ui
 
             m_writeBackReceipt = new CheckBox
             {
-                Text = "Write the receipt to a protected field on the entry (enables \"Burn last share\")",
+                Text = "Write the receipt (and passphrase, if any) to protected fields on the " +
+                       "entry (enables \"Burn last share\")",
                 Checked = writeBackReceipt,
                 AutoSize = false,
-                // 79 characters wraps to two lines at this width - a single-line-tall box
-                // clipped the second line. Found by code review, not by testing.
-                Bounds = new Rectangle(160, y, 424, 36)
+                // Longer text than the original 79-character wording (M4's own AutoSize
+                // finding) can wrap to three lines at this width - sized generously rather
+                // than measured exactly, since clipping here is the same class of bug.
+                Bounds = new Rectangle(160, y, 424, 50)
             };
             Controls.Add(m_writeBackReceipt);
-            y += 44;
+            y += 58;
 
             m_passphraseMode = new ComboBox
             {
