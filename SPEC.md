@@ -627,11 +627,21 @@ Two distribution formats; ship the plain DLL first.
 
 - **DLL**: faster load. Requires a KeePass restart after every rebuild — KeePass caches
   loaded plugins. Set up `build/post-build-copy.ps1` early to copy into the KeePass
-  `Plugins` folder, or hours will be lost to stale binaries.
+  `Plugins` folder, or hours will be lost to stale binaries. **v1.0.0 ships this way,
+  DLL-only.**
 - **`.plgx`**: ships source that KeePass compiles at load. More resilient across
   KeePass/.NET versions and works under Mono, but requires explicit reference directives
   for any assembly beyond the defaults and forbids NuGet packages entirely — which is
-  why constraint 3 above matters.
+  why constraint 3 above matters. **Deferred past v1.0.0**: M7's investigation found
+  KeePass 2.61.1.0's own `--plgx-create`/load-time compiler behaves inconsistently
+  against this project's SDK-style `.csproj` — sometimes packaging outright fails with
+  no error, and when it does package, the load-time compile silently produces an empty
+  3KB stub assembly regardless of what's in the `.csproj`'s reference list, even though
+  the identical extracted source compiles cleanly with `csc.exe` directly given the
+  right five references. The failure was not reproducible in a controlled way (identical
+  inputs succeeded three times, then failed) — pointing at some KeePass-side cache or
+  state issue on this specific machine rather than a `.csproj` content problem this
+  project can fix. See `ROADMAP.md`'s M7 progress note for the full investigation.
 
 Set `Plugin.UpdateUrl` to a version file in the repo so KeePass's update check works.
 Include the plugin version in `AssemblyInfo.cs` and keep it in sync with git tags.
