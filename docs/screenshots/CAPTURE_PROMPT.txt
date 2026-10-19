@@ -1,0 +1,76 @@
+I need you to use computer use to capture a series of KeePass screenshots for a
+plugin's documentation. Please request access to KeePass and to the Windows Snipping
+Tool (or Snip & Sketch) before starting.
+
+CONTEXT: There's a KeePass plugin called "OneTimeSecret" already installed on this
+machine (Tools -> Plugins should show it). It shares a KeePass entry's password as a
+one-time web link. I need clean screenshots of its UI for two documentation files.
+
+IMPORTANT SAFETY RULE: Do not use a real password database for this. Open or create a
+throwaway test .kdbx file with one fake entry in it (e.g. Title "Example Login",
+User name "demo-user", Password "ExamplePassword123!", URL "https://example.com").
+Never open my real/main password database for this task.
+
+SAVE LOCATION: Save every screenshot as a PNG into this exact folder:
+C:\code\ML-Smartfile\keepass-onetimesecret\docs\screenshots\
+Use the exact filenames listed below. Crop each screenshot to just the relevant window
+or menu (not the full desktop) where reasonable.
+
+Please capture, in this order (some steps build on the previous one):
+
+1. tools-plugins-menu.png
+   Open KeePass. Click the "Tools" menu so it's open, with "Plugins" visible/highlighted
+   in the dropdown. Screenshot the open menu.
+
+2. plugins-dialog-listed.png
+   Click Plugins. Screenshot the Plugins dialog showing "OneTimeSecret" in the list with
+   its version number.
+
+3. plugins-dialog-folder-icon.png
+   In that same Plugins dialog, screenshot it again with the small folder-open icon
+   button visible/highlighted (don't necessarily click it, just show where it is).
+
+4. tools-options-menu.png
+   Close that dialog. Open the "Tools" menu again, this time with "OneTimeSecret
+   Options..." visible/highlighted in the dropdown.
+
+5. options-window.png
+   Click "OneTimeSecret Options...". Screenshot the full settings window that opens
+   (shows Server, Credentials, Share defaults sections). Leave credentials empty/unset.
+   Set "Write the receipt back to the entry" to ON/checked if that checkbox exists -
+   this is needed for step 9 below to work. Click OK to save and close.
+
+6. context-submenu.png
+   Right-click the test entry you created. Hover over "OneTimeSecret" in the right-click
+   menu so the submenu expands showing "Share...", "Quick Share...". Screenshot the
+   expanded submenu. (At this point "Burn Last Share..." should NOT be visible yet -
+   that's expected, it only appears after a share exists.)
+
+7. share-window-filled.png
+   Click "Share...". A window opens with checkboxes, a preview box, a lifetime dropdown,
+   and a passphrase option. Set passphrase to "Generate one". Screenshot the filled-in
+   window before clicking the Share button.
+
+8. result-window.png
+   Click the Share/send button in that window. Wait for it to finish. Screenshot the
+   result window that shows the link and the generated passphrase with their Copy
+   buttons. (The link and passphrase in the screenshot are for a throwaway test entry,
+   so it's fine if they're visible - just don't do this with a real credential.)
+
+9. burn-menu.png
+   Close the result window. Right-click the same test entry again, hover over
+   "OneTimeSecret" - the submenu should now also show "Burn Last Share...". Screenshot
+   this expanded submenu (same framing as step 6, but now with the third item visible).
+
+10. quickshare-confirm.png
+    Right-click the test entry, click "Quick Share..." instead of Share. A small
+    confirmation popup appears asking to confirm sharing specific fields. Screenshot
+    that confirmation popup (don't need to click OK/Cancel after - either is fine to
+    dismiss it).
+
+When finished, list which of the 10 files you successfully saved to that folder, and
+flag anything you couldn't capture or any step where the UI looked different from what's
+described above (plugin UI may have changed slightly since this was written).
+
+Do NOT edit any markdown/documentation files and do NOT run any git commands - just
+save the PNG files. Someone else will wire them into the docs afterward.

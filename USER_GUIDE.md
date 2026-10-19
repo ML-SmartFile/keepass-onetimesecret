@@ -1,5 +1,7 @@
 # OneTimeSecret for KeePass — Plain-English Guide
 
+*[Diese Anleitung auf Deutsch](USER_GUIDE.de.md)*
+
 This guide is for anyone who uses KeePass to store passwords but doesn't want to deal
 with technical jargon. It walks through installing the plugin, setting it up, and using
 it to send a password to someone else safely — step by step, with nothing assumed.
@@ -38,18 +40,16 @@ internet connection to download the plugin.
    [releases page](https://github.com/ML-SmartFile/keepass-onetimesecret/releases/latest)
    and download the file named `OneTimeSecret.dll`.
 
-   <!-- Screenshot: the GitHub releases page with OneTimeSecret.dll highlighted -->
-
 2. Open KeePass.
 
 3. In the menu bar at the top, click **Tools**, then **Plugins**.
 
-   <!-- Screenshot: KeePass Tools menu with Plugins highlighted -->
+   ![KeePass Tools menu with Plugins highlighted](docs/screenshots/tools-plugins-menu.png)
 
-4. In the Plugins window that opens, click the small folder icon (it opens the folder
-   where KeePass keeps its plugins). This opens a normal Windows folder window.
+4. In the Plugins window that opens, click the **Open Folder** button (it opens the
+   folder where KeePass keeps its plugins). This opens a normal Windows folder window.
 
-   <!-- Screenshot: the Plugins dialog with the folder-open icon highlighted -->
+   ![The Plugins dialog with the Open Folder button highlighted](docs/screenshots/plugins-dialog-folder-icon.png)
 
 5. Copy the `OneTimeSecret.dll` file you downloaded in step 1 into that folder (drag it
    in, or copy-and-paste it like any other file).
@@ -60,7 +60,7 @@ internet connection to download the plugin.
 7. To check it worked: open **Tools → Plugins** again. You should now see
    "OneTimeSecret" listed with a version number.
 
-   <!-- Screenshot: the Plugins dialog showing OneTimeSecret listed -->
+   ![The Plugins dialog showing OneTimeSecret listed](docs/screenshots/plugins-dialog-listed.png)
 
 If you don't see it listed, double check you copied the file into the right folder in
 step 5, and that you fully restarted KeePass (not just minimized it).
@@ -76,7 +76,7 @@ changing the defaults (like how long a shared link should last before it expires
 
 1. In KeePass, click **Tools**, then **OneTimeSecret Options…**
 
-   <!-- Screenshot: Tools menu with OneTimeSecret Options highlighted -->
+   ![Tools menu with OneTimeSecret Options highlighted](docs/screenshots/tools-options-menu.png)
 
 2. You'll see a settings window with a few sections:
 
@@ -102,7 +102,7 @@ changing the defaults (like how long a shared link should last before it expires
      - **Passphrase** — see the explanation in Part 3 below. You can set the default
        behavior here.
 
-   <!-- Screenshot: the OneTimeSecret Options window, full view -->
+   ![The OneTimeSecret Options window](docs/screenshots/options-window.png)
 
 3. Click **OK** to save your settings and close the window.
 
@@ -116,7 +116,7 @@ changing the defaults (like how long a shared link should last before it expires
 2. In the right-click menu, hover over **OneTimeSecret**. A small side menu appears with
    a few options — the two you'll use are **Share…** and **Quick Share…**
 
-   <!-- Screenshot: right-click menu on an entry, showing the OneTimeSecret submenu -->
+   ![Right-click menu on an entry, showing the OneTimeSecret submenu](docs/screenshots/context-submenu.png)
 
 ### Option A: "Share…" — when you want to double check everything first
 
@@ -153,15 +153,21 @@ changing the defaults (like how long a shared link should last before it expires
    working, which becomes **Close** once the information has actually been sent — at
    that point, cancelling can't "unsend" it, since it may already be stored.)
 
-   <!-- Screenshot: the Share window, filled in, ready to send -->
+   ![The Share window, filled in, ready to send](docs/screenshots/share-window-filled.png)
 
 8. Once it's done, a result window shows you:
    - The **link** to send to the other person, with its own **Copy** button.
    - If you chose to generate or enter a passphrase, that's shown too, with a
      **separate Copy button** — on purpose, so copying one doesn't overwrite the other
      on your clipboard.
+   - A **receipt link**, with its own Copy button — this is not for the other person;
+     it's what lets you revoke the share early later (see Part 4).
 
-   <!-- Screenshot: the result window showing the link and passphrase -->
+   <!-- Screenshot: the result window showing the link, passphrase, and receipt link —
+        pending; see docs/screenshots/CAPTURE_PROMPT.txt -->
+
+   > This window also tells you the clipboard clears itself in a few seconds — copy
+   > whatever you need from it before closing the window.
 
 9. Send the link (and passphrase, if there is one) to the other person however you
    normally would — chat, email, text message. Remember: if you used a passphrase, send
@@ -181,7 +187,7 @@ changing the defaults (like how long a shared link should last before it expires
    user name and password from 'Example Login' with eu.onetimesecret.com?"). Click **OK**
    to confirm, or **Cancel** to back out.
 
-   <!-- Screenshot: the Quick Share confirmation box -->
+   ![The Quick Share confirmation box](docs/screenshots/quickshare-confirm.png)
 
 3. It sends using whatever defaults you set up in Part 2 (or the built-in defaults if you
    skipped that part) — no other window to fill in.
@@ -210,7 +216,7 @@ saved on that same password entry, which is what lets you burn it later.
 2. In the **OneTimeSecret** submenu, you'll now see **Burn Last Share…** underneath
    Share and Quick Share (it only appears if that entry has an active share to revoke).
 
-   <!-- Screenshot: right-click menu showing Burn Last Share -->
+   ![Right-click menu showing Burn Last Share](docs/screenshots/burn-menu.png)
 
 3. Click it, confirm in the box that appears, and the link is deactivated — if anyone
    tries to open it after this, they'll see it's no longer available.
