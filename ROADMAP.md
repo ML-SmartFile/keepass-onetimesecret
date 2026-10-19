@@ -211,19 +211,21 @@ write-up in the progress note below); the shipped design:
 
 **Branch:** `m7-release`
 
-- `build/build-plgx.ps1` producing a working `.plgx`
-- `Plugin.UpdateUrl` pointing at a version file in the repo
-- README: install instructions, configuration walkthrough, screenshots, and an honest
-  security section covering what the plugin transmits, to whom, and the limits of
-  in-memory secret scrubbing in .NET
-- CHANGELOG, v1.0.0 tag, GitHub release with both DLL and `.plgx`
+- `Plugin.UpdateUrl` pointing at `UPDATE.txt` in the repo
+- README: install instructions, configuration walkthrough, screenshots (pending —
+  placeholders in place, see the progress note), and an honest security section covering
+  what the plugin transmits, to whom, and the limits of in-memory secret scrubbing in
+  .NET
+- CHANGELOG, v1.0.0 tag, GitHub release with the DLL
+- `build/build-plgx.ps1` producing a working `.plgx` — **deferred past v1.0.0**, see the
+  progress note below for why
 
 **Acceptance:**
-- The `.plgx` loads cleanly in a fresh KeePass install on a machine that has never
-  built the project
 - KeePass's update check detects a newer version when the version file is bumped
 - The README's install instructions work when followed literally by someone who has
   not seen the codebase
+- ~~The `.plgx` loads cleanly in a fresh KeePass install on a machine that has never
+  built the project~~ — deferred; no `.plgx` ships in v1.0.0
 
 ---
 
@@ -723,3 +725,57 @@ process, none caught by the build or the 218 (now 225) passing unit tests:
   immune to the configured `Entry` entry having changed since), falling back to a live
   `PassphraseResolver` re-resolution only for a receipt written before this field
   existed.
+
+<!-- M7: -->
+**M7 — 2026-09-30.** `Plugin.UpdateUrl`, `UPDATE.txt`, the v1.0.0 version bump, README
+install/config/security sections, and `CHANGELOG.md`. The `.plgx` build was investigated
+in depth and deliberately deferred rather than shipped broken or half-verified — recorded
+here in full since it cost real time and a future session should not re-attempt the same
+things without reading this first.
+
+- **`.plgx` creation and load-time compilation are broken, or at least inconsistent, for
+  this project on this machine, against KeePass 2.61.1.0.** Confirmed step by step, not
+  assumed:
+  - `KeePass.exe --plgx-create <dir>` against this project's real, SDK-style `.csproj`
+    *does* correctly bundle all 30 source files (verified by extracting the resulting
+    container and diffing the file list) - contrary to the concern that implicit file
+    globbing (no explicit `<Compile Include>` items) would confuse KeePass's plgx
+    creator. That part works.
+  - Loading that `.plgx` in an isolated, throwaway KeePass profile (a second portable
+    copy, config and plugin cache both cleared) triggers a real load-time compile - but
+    the result is consistently an empty ~3KB stub assembly with none of this plugin's
+    types in it, regardless of what the `.csproj`'s reference list said. Tried three
+    variants (the real project's `Microsoft.NETFramework.ReferenceAssemblies.net472`
+    `PackageReference` intact; removed; replaced with explicit
+    `<Reference Include="System.Windows.Forms" />` etc.) - identical 3072-byte result
+    every time.
+  - Isolated the actual source: extracted the exact bundled `.cs` files from KeePass's
+    own plgx-compile cache directory and compiled them directly with `csc.exe`, giving
+    it only `System`, `System.Core`, `System.Drawing`, `System.Windows.Forms`, and
+    `KeePass.exe` as references - a clean, complete, correctly-sized (108KB) assembly
+    with zero errors. **The source and the reference list are both fine; whatever KeePass's
+    own plgx compiler does internally with the `.csproj`'s reference info is not
+    working.**
+  - Tried the classic, explicitly-namespaced MSBuild `.csproj` format the older official
+    plgx docs describe (explicit `<Compile Include>` and `<Reference>` items, no SDK
+    attribute) as an alternative - `--plgx-create` failed to produce any output at all
+    against it, including against a maximally minimal one-file test plugin built the
+    same way. Classic-style is not a working fallback on this KeePass version, whatever
+    the docs say.
+  - **The failure is not even reliably reproducible.** The exact same directory and
+    command that had produced a working container three times in a row (still failing
+    the load-time compile each time, per above) was re-run with literally nothing
+    changed and failed to produce any output on the fourth attempt. This point is why
+    the investigation stopped: a content-dependent bug has a fix; this behaved like
+    stateful flakiness (found a `PluginCache` directory under `%LocalAppData%\KeePass`
+    that plausibly explains some of it, but clearing it did not restore reliable
+    success either).
+- **Decision, given to the user directly rather than assumed**: ship v1.0.0 as
+  DLL-only, which `SPEC.md` §10 already explicitly permitted as an acceptable first
+  step. `.plgx` stays a real backlog item, not a silently dropped one - worth revisiting
+  on a second machine (to separate "this project's `.csproj`" from "this machine's
+  KeePass/plgx-cache state") before sinking more time into it blind.
+- Screenshots for the README are placeholders, not yet captured - this plugin has no
+  UI-automation path (established throughout this project), so they need the user's own
+  captures. Not a blocker for the rest of this milestone, per the user's own choice when
+  asked.

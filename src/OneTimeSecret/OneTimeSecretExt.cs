@@ -32,6 +32,18 @@ namespace OneTimeSecret
             return true;
         }
 
+        /// <summary>
+        /// A version-info file, not a download link - KeePass fetches this to compare
+        /// against the installed assembly version. Points at UPDATE.txt on `main`, not a
+        /// GitHub Release asset: a release, once published, is immutable, so the URL a
+        /// user's already-installed plugin checks has to be one whose *content* can change
+        /// with each future release, which only a repo file on the default branch can be.
+        /// </summary>
+        public override string UpdateUrl
+        {
+            get { return "https://raw.githubusercontent.com/ML-SmartFile/keepass-onetimesecret/main/UPDATE.txt"; }
+        }
+
         public override void Terminate()
         {
             if (m_host != null && m_host.MainWindow != null && m_host.MainWindow.EntryContextMenu != null)
