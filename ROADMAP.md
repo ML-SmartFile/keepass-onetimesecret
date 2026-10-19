@@ -231,7 +231,20 @@ write-up in the progress note below); the shipped design:
 
 ## Backlog — requested, not yet scheduled
 
-Empty. Quick Share (requested 2026-09-24) was the only entry; built 2026-09-27 on branch
+- **UI localization (requested 2026-10-19, for v2.0.0).** Translate the plugin's own UI
+  (`ShareForm`, `ResultForm`, `OptionsForm`, context menu items, message boxes, error
+  text) — German requested first. Confirmed possible, not scheduled yet. Two real
+  tradeoffs to resolve at design time, not just string-extraction busywork:
+  - **Distribution.** The standard .NET approach (resx + satellite assemblies) means
+    shipping more than one file per language instead of the current single
+    `OneTimeSecret.dll` — needs reconciling with M7's DLL-only packaging decision.
+  - **Translation quality.** This is a security tool; machine-translated strings in it
+    are a worse failure mode than no translation. Needs native-speaker review before
+    shipping, not just extraction.
+  - Still open: which language the plugin should follow — KeePass's own configured UI
+    language, or the OS locale.
+
+Quick Share (requested 2026-09-24) was the prior entry; built 2026-09-27 on branch
 `backlog-quick-share` — see the progress notes below for how its three design tensions
 were resolved.
 

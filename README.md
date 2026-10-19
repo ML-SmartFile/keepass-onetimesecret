@@ -7,6 +7,10 @@ self-hosted instances, anonymous or authenticated sharing, an optional passphras
 burning a share early. See `SPEC.md` for the technical spec and `ROADMAP.md` for what is
 built so far.
 
+**Not a programmer, just want to use the plugin?** See `USER_GUIDE.md` for a plain-English,
+step-by-step walkthrough of installing, setting up, and sharing a password — this README
+is the technical reference.
+
 ## Install
 
 1. Download `OneTimeSecret.dll` from the
@@ -44,13 +48,13 @@ confirm exactly what's being sent and adjust it per-share) or **Quick Share…**
 immediately using your configured defaults, after one confirmation). **Burn Last
 Share…** appears once an entry has an active share to revoke.
 
-<!--
-  Screenshots to add here once captured (see ROADMAP.md's M7 progress note):
-  - The "OneTimeSecret" entry context submenu (Share… / Quick Share… / Burn Last Share…)
-  - The Share dialog (ShareForm)
-  - The result dialog after a successful share (ResultForm)
-  - The Options dialog
--->
+![The OneTimeSecret entry context submenu](docs/screenshots/burn-menu.png)
+
+![The Share dialog](docs/screenshots/share-window-filled.png)
+
+![The result dialog](docs/screenshots/result-window.png)
+
+![The Options dialog](docs/screenshots/options-window.png)
 
 ## Security
 
