@@ -52,7 +52,7 @@ Share…** appears once an entry has an active share to revoke.
 
 ![The Share dialog](docs/screenshots/share-window-filled.png)
 
-<!-- The result dialog (ResultForm) screenshot is pending — see docs/screenshots/CAPTURE_PROMPT.txt -->
+![The result dialog](docs/screenshots/result-window.png)
 
 ![The Options dialog](docs/screenshots/options-window.png)
 

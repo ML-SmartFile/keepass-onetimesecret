@@ -1,4 +1,4 @@
-# OneTimeSecret for KeePass — Plain-English Guide
+# OneTimeSecret for KeePass — User Guide
 
 *[Diese Anleitung auf Deutsch](USER_GUIDE.de.md)*
 
@@ -163,8 +163,7 @@ changing the defaults (like how long a shared link should last before it expires
    - A **receipt link**, with its own Copy button — this is not for the other person;
      it's what lets you revoke the share early later (see Part 4).
 
-   <!-- Screenshot: the result window showing the link, passphrase, and receipt link —
-        pending; see docs/screenshots/CAPTURE_PROMPT.txt -->
+   ![The result window showing the link, passphrase, and receipt link](docs/screenshots/result-window.png)
 
    > This window also tells you the clipboard clears itself in a few seconds — copy
    > whatever you need from it before closing the window.

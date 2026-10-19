@@ -1,4 +1,4 @@
-# OneTimeSecret für KeePass — Verständliche Anleitung
+# OneTimeSecret für KeePass — Benutzerhandbuch
 
 *[This guide in English](USER_GUIDE.md)*
 
@@ -179,8 +179,7 @@ gültig sein soll).
      dieser ist nicht für die andere Person bestimmt, sondern ermöglicht Ihnen, die
      Freigabe später vorzeitig zurückzuziehen (siehe Teil 4).
 
-   <!-- Bildschirmfoto: Ergebnisfenster mit Link, Passphrase und Receipt-Link —
-        steht noch aus; siehe docs/screenshots/CAPTURE_PROMPT.txt -->
+   ![Ergebnisfenster mit Link, Passphrase und Receipt-Link](docs/screenshots/result-window.png)
 
    > Das Fenster weist außerdem darauf hin, dass sich die Zwischenablage nach wenigen
    > Sekunden automatisch leert — kopieren Sie alles Benötigte, bevor Sie das Fenster
