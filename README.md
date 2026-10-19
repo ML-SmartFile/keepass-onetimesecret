@@ -7,6 +7,10 @@ self-hosted instances, anonymous or authenticated sharing, an optional passphras
 burning a share early. See `SPEC.md` for the technical spec and `ROADMAP.md` for what is
 built so far.
 
+**Not a programmer, just want to use the plugin?** See `USER_GUIDE.md` for a plain-English,
+step-by-step walkthrough of installing, setting up, and sharing a password — this README
+is the technical reference.
+
 ## Install
 
 1. Download `OneTimeSecret.dll` from the
